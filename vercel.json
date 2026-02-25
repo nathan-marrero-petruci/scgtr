@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json.schemastore.org/vercel.json",
+  "buildCommand": "cd frontend && npm run build",
+  "installCommand": "cd frontend && npm install",
+  "outputDirectory": "frontend/dist",
+  "rootDirectory": "frontend",
+  "env": {
+    "VITE_API_URL": "@scgtr_api_url"
+  },
+  "envPrefix": "VITE_"
+}
