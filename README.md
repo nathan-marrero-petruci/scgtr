@@ -501,3 +501,83 @@ A preferência de visualização é salva no localStorage do navegador.
 - Notificações em tempo real (SignalR)
 - Testes automatizados (xUnit + Jest/Vitest)
 - Adicionar mais tipos de gráficos (scatter, heatmap, timeline)
+
+---
+
+## 14. Deploy gratuito (Fly.io + Vercel)
+
+### 14.1. Deploy do Backend (Fly.io)
+
+**Requisitos:**
+- Conta no [fly.io](https://fly.io)
+- CLI do Fly instalado: `curl -L https://fly.io/install.sh | sh`
+- GitHub CLI (opcional, mas recomendado)
+
+**Passos:**
+
+1. Login no Fly:
+   ```bash
+   fly auth login
+   ```
+
+2. Na raiz do backend, fazer deploy:
+   ```bash
+   cd backend/Api
+   fly launch --name scgtr-api  # Escolha um nome único
+   ```
+
+3. Na primeira vez, o Fly vai:
+   - Detectar Dockerfile
+   - Criar volume persistente (para SQLite)
+   - Publicar a app
+
+4. Salvar a URL (algo como `https://scgtr-api.fly.dev`)
+
+**Monitorar:**
+   ```bash
+   fly logs -a scgtr-api
+   fly status -a scgtr-api
+   ```
+
+### 14.2. Deploy do Frontend (Vercel)
+
+**Requisitos:**
+- Conta no [vercel.com](https://vercel.com)
+- Projeto no GitHub
+
+**Passos:**
+
+1. Ir em [vercel.com/new](https://vercel.com/new)
+2. Importar repositório (scgtr)
+3. Em **Environment Variables**, adicionar:
+   - `VITE_API_URL` = `https://scgtr-api.fly.dev/api` (URL do seu backend Fly)
+4. Clicar em Deploy
+
+Vercel vai:
+- Detectar React + Vite
+- Fazer build automático
+- Disponibilizar em URL tipo `https://scgtr.vercel.app`
+
+### 14.3. Testar produção
+
+1. Abrir frontend em produção
+2. Ir para **Filtro do Dashboard** e testar:
+   - ✅ Carregar dados
+   - ✅ Criar transportadora
+   - ✅ Criar rota
+   - ✅ Registrar PNR
+   - ✅ Ver gráficos
+
+### 14.4. Notas importantes
+
+- **Banco em Vercel** é **somente leitura** (para front estático)
+- **Banco no Fly** é **persistente** (volume `/data`)
+- Se precisar resetar dados, use: `fly ssh console -a scgtr-api`
+- CORS já configurado para aceitar `*.vercel.app`
+- Arquivo `.env.example` serve como referência (não versionar `.env`)
+
+### 14.5. Custo esperado
+
+- **Fly.io**: Gratuito até 3 máquinas compartilhadas + 3GB storage
+- **Vercel**: Gratuito para projetos estáticos (React)
+- **Total**: Pode ficar 100% gratuito dentro dos limites

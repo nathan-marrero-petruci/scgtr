@@ -4,7 +4,10 @@ using System.Text.Json.Serialization;
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddOpenApi();
-builder.Services.AddDbContext<AppDbContext>(options => options.UseSqlite("Data Source=controle-ganhos.db"));
+
+// Configurar caminho do banco (Fly.io usa /data para volume persistente)
+var dbPath = builder.Configuration["DB_PATH"] ?? "controle-ganhos.db";
+builder.Services.AddDbContext<AppDbContext>(options => options.UseSqlite($"Data Source={dbPath}"));
 builder.Services.ConfigureHttpJsonOptions(options =>
 {
     options.SerializerOptions.ReferenceHandler = ReferenceHandler.IgnoreCycles;
@@ -13,7 +16,15 @@ builder.Services.AddCors(options =>
 {
     options.AddPolicy("frontend", policy =>
     {
-        policy.WithOrigins("http://localhost:5173")
+        var allowedOrigins = new[] 
+        { 
+            "http://localhost:5173", 
+            "http://localhost:3000",
+            // Frontend no Vercel (substitua pelo seu dominio)
+            "https://*.vercel.app"
+        };
+        
+        policy.WithOrigins(allowedOrigins)
             .AllowAnyHeader()
             .AllowAnyMethod();
     });
