@@ -2,7 +2,12 @@ import { useEffect, useMemo, useState } from 'react'
 import './App.css'
 import { SummaryChart, PrevisaoChart, HistoricoChart, TipoRotaChart } from './Charts'
 
-const API_BASE = 'http://localhost:5151/api'
+const resolveApiBase = () => {
+  const configured = (import.meta.env.VITE_API_URL || 'http://localhost:5151/api').replace(/\/+$/, '')
+  return /\/api$/i.test(configured) ? configured : `${configured}/api`
+}
+
+const API_BASE = resolveApiBase()
 
 const formatCurrency = (value) =>
   new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(

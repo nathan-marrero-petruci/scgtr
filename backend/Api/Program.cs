@@ -16,15 +16,31 @@ builder.Services.AddCors(options =>
 {
     options.AddPolicy("frontend", policy =>
     {
-        var allowedOrigins = new[] 
-        { 
-            "http://localhost:5173", 
-            "http://localhost:3000",
-            // Frontend no Vercel (substitua pelo seu dominio)
-            "https://*.vercel.app"
-        };
-        
-        policy.WithOrigins(allowedOrigins)
+        policy.SetIsOriginAllowed(origin =>
+            {
+                if (string.IsNullOrWhiteSpace(origin))
+                {
+                    return false;
+                }
+
+                if (!Uri.TryCreate(origin, UriKind.Absolute, out var uri))
+                {
+                    return false;
+                }
+
+                if (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps)
+                {
+                    return false;
+                }
+
+                if (uri.Host.Equals("localhost", StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+
+                return uri.Host.EndsWith(".vercel.app", StringComparison.OrdinalIgnoreCase)
+                    || uri.Host.EndsWith(".pages.dev", StringComparison.OrdinalIgnoreCase);
+            })
             .AllowAnyHeader()
             .AllowAnyMethod();
     });
