@@ -2,7 +2,8 @@
 FROM mcr.microsoft.com/dotnet/sdk:9.0 AS build
 WORKDIR /src
 
-COPY ["Api.csproj", "."]
+# Caminho do Api.csproj
+COPY backend/Api/Api.csproj .
 RUN dotnet restore "Api.csproj"
 
 COPY . .
