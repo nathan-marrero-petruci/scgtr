@@ -3,7 +3,7 @@ import './App.css'
 import { SummaryChart, PrevisaoChart, HistoricoChart, TipoRotaChart } from './Charts'
 
 const resolveApiBase = () => {
-  const configured = (import.meta.env.VITE_API_URL || 'http://localhost:5151/api').replace(/\/+$/, '')
+  const configured = (import.meta.env.VITE_API_URL || 'https://scgtr-production.up.railway.app/').replace(/\/+$/, '')
   return /\/api$/i.test(configured) ? configured : `${configured}/api`
 }
 
