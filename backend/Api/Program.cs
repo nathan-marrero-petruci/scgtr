@@ -39,7 +39,8 @@ builder.Services.AddCors(options =>
                 }
 
                 return uri.Host.EndsWith(".vercel.app", StringComparison.OrdinalIgnoreCase)
-                    || uri.Host.EndsWith(".pages.dev", StringComparison.OrdinalIgnoreCase);
+                    || uri.Host.EndsWith(".pages.dev", StringComparison.OrdinalIgnoreCase)
+                    || uri.Host.EndsWith(".up.railway.app", StringComparison.OrdinalIgnoreCase);
             })
             .AllowAnyHeader()
             .AllowAnyMethod();
