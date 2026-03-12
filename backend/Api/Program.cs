@@ -440,6 +440,15 @@ app.MapGet("/api/dashboard/historico", async (AppDbContext db, DateOnly? startDa
     return Results.Ok(historico);
 });
 
+app.MapPost("/api/clear-test-data", async (AppDbContext db) =>
+{
+    db.Transportadoras.RemoveRange(db.Transportadoras);
+    db.Rotas.RemoveRange(db.Rotas);
+    db.Pnrs.RemoveRange(db.Pnrs);
+    await db.SaveChangesAsync();
+    return Results.Ok("Dados de teste removidos com sucesso.");
+});
+
 app.Run();
 
 static (bool IsValid, string? ErrorMessage) ValidarRotaFinanceira(decimal? valorFixo, decimal? valorPorPacote, int quantidadePacotes)
