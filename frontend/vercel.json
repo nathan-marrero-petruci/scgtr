@@ -3,7 +3,7 @@
   "buildCommand": "npm run build",
   "outputDirectory": "./dist",
   "env": {
-    "VITE_API_URL": "@scgtr_api_url"
+    "VITE_API_URL": "https://scgtr-production.up.railway.app/"
   },
   "envPrefix": "VITE_"
 }
