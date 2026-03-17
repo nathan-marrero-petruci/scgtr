@@ -234,12 +234,12 @@ function App() {
   return (
     <div className="app">
       <header>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div className="header-inner">
           <div>
             <h1>Controle de Ganhos por Transportadora</h1>
             <p>POC .NET + React para gestão de rotas, PNR e ganhos</p>
           </div>
-          <div style={{ display: 'flex', gap: '20px', alignItems: 'center' }}>
+          <div className="header-controls">
             <div className="segmented-control">
               <button 
                 className={viewMode === 'charts' ? 'active' : ''}
@@ -391,6 +391,7 @@ function App() {
             Histórico de Transportadoras Cadastradas ({transportadoras.length})
           </h3>
           {showTransportadorasHistorico && (
+            <div style={{ overflowX: 'auto' }}>
             <table style={{ marginTop: '10px', width: '100%' }}>
               <thead>
                 <tr>
@@ -429,6 +430,7 @@ function App() {
                 ))}
               </tbody>
             </table>
+            </div>
           )}
         </div>
       </section>
@@ -505,28 +507,30 @@ function App() {
             Histórico de Rotas Cadastradas ({rotasRecentes.length})
           </h3>
           {showRotasHistorico && (
-            <table style={{ marginTop: '10px' }}>
-              <thead>
-                <tr>
-                  <th>Data</th>
-                  <th>Transportadora</th>
-                  <th>Bruto</th>
-                  <th>PNR</th>
-                  <th>Líquido</th>
-                </tr>
-              </thead>
-              <tbody>
-                {rotasRecentes.map((rota) => (
-                  <tr key={rota.id}>
-                    <td>{rota.dataRota}</td>
-                    <td>{rota.transportadoraNome}</td>
-                    <td>{formatCurrency(rota.valorTotalCalculado)}</td>
-                    <td>{formatCurrency(rota.totalDescontosPnr)}</td>
-                    <td>{formatCurrency(rota.valorLiquido)}</td>
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ marginTop: '10px' }}>
+                <thead>
+                  <tr>
+                    <th>Data</th>
+                    <th>Transportadora</th>
+                    <th>Bruto</th>
+                    <th>PNR</th>
+                    <th>Líquido</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {rotasRecentes.map((rota) => (
+                    <tr key={rota.id}>
+                      <td>{rota.dataRota}</td>
+                      <td>{rota.transportadoraNome}</td>
+                      <td>{formatCurrency(rota.valorTotalCalculado)}</td>
+                      <td>{formatCurrency(rota.totalDescontosPnr)}</td>
+                      <td>{formatCurrency(rota.valorLiquido)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </div>
       </section>
