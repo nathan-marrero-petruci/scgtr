@@ -1,10 +1,27 @@
 import { useEffect, useMemo, useState } from 'react'
 import './App.css'
-import { SummaryChart, PrevisaoChart, HistoricoChart, TipoRotaChart } from './Charts'
+import { SummaryChart, PrevisaoChart, HistoricoChart, TipoRotaChart, PaymentsOverviewChart } from './Charts'
 
 const resolveApiBase = () => {
-  const configured = (import.meta.env.VITE_API_URL || 'https://scgtr-production.up.railway.app/').replace(/\/+$/, '')
-  return /\/api$/i.test(configured) ? configured : `${configured}/api`
+  // Prefer explicit VITE_API_URL when provided
+  const envUrl = import.meta.env.VITE_API_URL
+  if (envUrl) {
+    const configured = envUrl.replace(/\/+$/, '')
+    return /\/api$/i.test(configured) ? configured : `${configured}/api`
+  }
+
+  // Auto-detect development (localhost)
+  try {
+    const host = typeof window !== 'undefined' ? window.location.hostname : ''
+    if (host === 'localhost' || host === '127.0.0.1') {
+      return 'http://localhost:5151/api'
+    }
+  } catch (e) {
+    // ignore and fallback to production
+  }
+
+  // Default production URL
+  return 'https://scgtr-production.up.railway.app/api'
 }
 
 const API_BASE = resolveApiBase()
@@ -24,6 +41,7 @@ function App() {
   const [summary, setSummary] = useState(null)
   const [previsao, setPrevisao] = useState([])
   const [historico, setHistorico] = useState([])
+  const [payments, setPayments] = useState([])
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
 
@@ -34,7 +52,7 @@ function App() {
   const [showRotasHistorico, setShowRotasHistorico] = useState(false)
   const [showPnrsHistorico, setShowPnrsHistorico] = useState(false)
 
-  const [transportadoraForm, setTransportadoraForm] = useState({ nome: '' })
+  const [transportadoraForm, setTransportadoraForm] = useState({ nome: '', scheduleFrequency: '', scheduleWeekday: '', scheduleDay: '' })
   const [rotaForm, setRotaForm] = useState({
     transportadoraId: '',
     dataRota: today,
@@ -143,21 +161,61 @@ function App() {
       setLoading(false)
     }
   }
+  const fetchPayments = async () => {
+    setError('')
+    try {
+      let query = `?startDate=${range.startDate}&endDate=${range.endDate}`
+      if (filterTransportadoraId) query += `&transportadoraId=${filterTransportadoraId}`
+      if (filterOnlyActive) query += `&onlyActive=true`
+      const data = await request(`/payments${query}`)
+      setPayments(data)
+    } catch (err) {
+      setError(err.message)
+    }
+  }
 
   useEffect(() => {
-    loadData()
+    (async () => {
+      await loadData()
+      await fetchPayments()
+    })()
   }, [])
+  
 
   const handleCreateTransportadora = async (event) => {
     event.preventDefault()
     setError('')
     try {
-      await request('/transportadoras', {
+      const created = await request('/transportadoras', {
         method: 'POST',
         body: JSON.stringify({ nome: transportadoraForm.nome }),
       })
-      setTransportadoraForm({ nome: '' })
+
+      // se houver schedule definido, salvar também
+      if (transportadoraForm.scheduleFrequency) {
+        const body = {
+          frequency: transportadoraForm.scheduleFrequency,
+          weekday: transportadoraForm.scheduleFrequency === 'weekly' && transportadoraForm.scheduleWeekday !== ''
+            ? Number(transportadoraForm.scheduleWeekday)
+            : null,
+          dayOfMonth: transportadoraForm.scheduleFrequency === 'quinzena' && transportadoraForm.scheduleDay !== ''
+            ? Number(transportadoraForm.scheduleDay)
+            : null
+        }
+
+        try {
+          await request(`/transportadoras/${created.id}/payment-schedule`, {
+            method: 'PUT',
+            body: JSON.stringify(body)
+          })
+        } catch (err) {
+          setError(err.message)
+        }
+      }
+
+      setTransportadoraForm({ nome: '', scheduleFrequency: '', scheduleWeekday: '', scheduleDay: '' })
       await loadData()
+      await fetchPayments()
     } catch (err) {
       setError(err.message)
     }
@@ -329,7 +387,7 @@ function App() {
               </div>
             </label>
           )}
-          <button type="button" onClick={loadData} disabled={loading} style={{ marginLeft: 'auto' }}>
+          <button type="button" onClick={async () => { await loadData(); await fetchPayments(); }} disabled={loading} style={{ marginLeft: 'auto' }}>
             Atualizar
           </button>
         </form>
@@ -379,6 +437,47 @@ function App() {
               required
             />
           </label>
+          <label>
+            Frequência de Pagamento
+            <select
+              value={transportadoraForm.scheduleFrequency}
+              onChange={(e) => setTransportadoraForm((prev) => ({ ...prev, scheduleFrequency: e.target.value }))}
+            >
+              <option value="">Nenhuma</option>
+              <option value="weekly">Semanal</option>
+              <option value="quinzena">Quinzena (meia-mês)</option>
+            </select>
+          </label>
+          {transportadoraForm.scheduleFrequency === 'weekly' && (
+            <label>
+              Dia da semana
+              <select
+                value={transportadoraForm.scheduleWeekday}
+                onChange={(e) => setTransportadoraForm((prev) => ({ ...prev, scheduleWeekday: e.target.value }))}
+              >
+                <option value="">Selecione</option>
+                <option value="0">Domingo</option>
+                <option value="1">Segunda</option>
+                <option value="2">Terça</option>
+                <option value="3">Quarta</option>
+                <option value="4">Quinta</option>
+                <option value="5">Sexta</option>
+                <option value="6">Sábado</option>
+              </select>
+            </label>
+          )}
+          {transportadoraForm.scheduleFrequency === 'quinzena' && (
+            <label>
+              Dia do mês
+              <input
+                type="number"
+                min="1"
+                max="31"
+                value={transportadoraForm.scheduleDay}
+                onChange={(e) => setTransportadoraForm((prev) => ({ ...prev, scheduleDay: e.target.value }))}
+              />
+            </label>
+          )}
           <button type="submit">Cadastrar</button>
         </form>
         
@@ -433,6 +532,72 @@ function App() {
             </div>
           )}
         </div>
+      </section>
+
+      <section className="card">
+        <h2>Pagamentos e Recebimentos</h2>
+        {/* Controles de atualização movidos para o filtro do dashboard (botão redundante removido) */}
+
+        {viewMode === 'charts' ? (
+          <div>
+            <PaymentsOverviewChart payments={payments} />
+          </div>
+        ) : (
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr style={{ borderBottom: '2px solid #ddd', textAlign: 'left' }}>
+                  <th style={{ padding: '8px' }}>Data Agendada</th>
+                  <th style={{ padding: '8px' }}>Transportadora</th>
+                  <th style={{ padding: '8px' }}>Período</th>
+                  <th style={{ padding: '8px', textAlign: 'right' }}>Ganho Bruto</th>
+                  <th style={{ padding: '8px', textAlign: 'right' }}>Descontos PNR</th>
+                  <th style={{ padding: '8px', textAlign: 'right' }}>Valor Devido</th>
+                  <th style={{ padding: '8px', textAlign: 'right' }}>Recebido</th>
+                  <th style={{ padding: '8px', textAlign: 'center' }}>Ações</th>
+                </tr>
+              </thead>
+              <tbody>
+                {payments.map((p, idx) => (
+                  <tr key={`${p.transportadoraId}-${p.scheduledDate}-${idx}`} style={{ borderBottom: '1px solid #eee' }}>
+                    <td style={{ padding: '8px' }}>{p.scheduledDate}</td>
+                    <td style={{ padding: '8px' }}>{p.transportadoraNome}</td>
+                    <td style={{ padding: '8px' }}>{p.periodStart} → {p.periodEnd}</td>
+                    <td style={{ padding: '8px', textAlign: 'right' }}>{formatCurrency(p.ganhosBrutos)}</td>
+                    <td style={{ padding: '8px', textAlign: 'right' }}>{formatCurrency(p.descontosPnr)}</td>
+                    <td style={{ padding: '8px', textAlign: 'right', fontWeight: 'bold' }}>{formatCurrency(p.amountDue)}</td>
+                    <td style={{ padding: '8px', textAlign: 'right' }}>{p.amountReceived ? formatCurrency(p.amountReceived) : '-'}</td>
+                    <td style={{ padding: '8px', textAlign: 'center' }}>
+                      {!p.paid ? (
+                        <button type="button" onClick={async () => {
+                          if (!confirm(`Registrar recebimento de ${formatCurrency(p.amountDue)} para ${p.transportadoraNome} em ${p.scheduledDate}?`)) return;
+                          try {
+                            await request('/payments', {
+                              method: 'POST',
+                              body: JSON.stringify({
+                                transportadoraId: p.transportadoraId,
+                                periodStart: p.periodStart,
+                                periodEnd: p.periodEnd,
+                                amountReceived: p.amountDue,
+                                notes: null
+                              })
+                            })
+                            await loadData()
+                            await fetchPayments()
+                          } catch (err) {
+                            setError(err.message)
+                          }
+                        }}>Registrar Recebimento</button>
+                      ) : (
+                        <span>Pago</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </section>
 
       <section className="card">
