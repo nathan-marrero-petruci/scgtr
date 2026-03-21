@@ -145,6 +145,66 @@ app.MapPatch("/api/transportadoras/{id:int}/reativar", async (AppDbContext db, i
     return Results.Ok(transportadora);
 });
 
+// Payment schedule endpoints
+app.MapGet("/api/transportadoras/{id:int}/payment-schedule", async (AppDbContext db, int id) =>
+{
+    var schedule = await db.PaymentSchedules.FirstOrDefaultAsync(x => x.TransportadoraId == id);
+    if (schedule is null)
+    {
+        return Results.NotFound();
+    }
+
+    return Results.Ok(new PaymentScheduleResponse(schedule.Frequency, schedule.Weekday, schedule.DayOfMonth));
+});
+
+app.MapPut("/api/transportadoras/{id:int}/payment-schedule", async (AppDbContext db, int id, PaymentScheduleRequest request) =>
+{
+    var transportadora = await db.Transportadoras.FindAsync(id);
+    if (transportadora is null)
+    {
+        return Results.NotFound();
+    }
+
+    if (request.Frequency is null || (request.Frequency != "weekly" && request.Frequency != "quinzena"))
+    {
+        return Results.BadRequest("Frequency inválida. Use 'weekly' ou 'quinzena'.");
+    }
+
+    if (request.Frequency == "weekly" && (!request.Weekday.HasValue || request.Weekday < 0 || request.Weekday > 6))
+    {
+        return Results.BadRequest("Weekday é obrigatório para frequência 'weekly' e deve estar entre 0 (domingo) e 6 (sábado).");
+    }
+
+    if (request.Frequency == "quinzena" && (!request.DayOfMonth.HasValue || request.DayOfMonth < 1 || request.DayOfMonth > 31))
+    {
+        return Results.BadRequest("DayOfMonth é obrigatório para frequência 'quinzena' e deve estar entre 1 e 31.");
+    }
+
+    var schedule = await db.PaymentSchedules.FirstOrDefaultAsync(x => x.TransportadoraId == id);
+    if (schedule is null)
+    {
+        schedule = new PaymentSchedule
+        {
+            TransportadoraId = id,
+            Frequency = request.Frequency,
+            Weekday = request.Weekday,
+            DayOfMonth = request.DayOfMonth,
+            CreatedAt = DateTime.UtcNow
+        };
+
+        db.PaymentSchedules.Add(schedule);
+    }
+    else
+    {
+        schedule.Frequency = request.Frequency;
+        schedule.Weekday = request.Weekday;
+        schedule.DayOfMonth = request.DayOfMonth;
+    }
+
+    await db.SaveChangesAsync();
+    return Results.Ok(new PaymentScheduleResponse(schedule.Frequency, schedule.Weekday, schedule.DayOfMonth));
+});
+
 app.MapGet("/api/rotas", async (AppDbContext db, DateOnly? startDate = null, DateOnly? endDate = null, int? transportadoraId = null) =>
 {
     var query = db.Rotas
@@ -321,6 +381,172 @@ app.MapDelete("/api/pnrs/{id:int}", async (AppDbContext db, int id) =>
     return Results.NoContent();
 });
 
+app.MapGet("/api/payments", async (AppDbContext db, DateOnly? startDate = null, DateOnly? endDate = null, int? transportadoraId = null, bool onlyActive = false) =>
+{
+    var inicio = startDate ?? DateOnly.FromDateTime(DateTime.Today);
+    var fim = endDate ?? inicio;
+
+    if (inicio > fim)
+    {
+        return Results.BadRequest("Período inválido.");
+    }
+
+    var transportadorasQuery = db.Transportadoras.AsQueryable();
+    if (transportadoraId.HasValue)
+    {
+        transportadorasQuery = transportadorasQuery.Where(t => t.Id == transportadoraId.Value);
+    }
+    if (onlyActive)
+    {
+        transportadorasQuery = transportadorasQuery.Where(t => t.Ativa);
+    }
+
+    var transportadorasList = await transportadorasQuery
+        .Include(t => t.PaymentSchedule)
+        .ToListAsync();
+
+    var results = new List<PaymentListItemResponse>();
+
+    foreach (var t in transportadorasList)
+    {
+        var schedule = t.PaymentSchedule;
+        if (schedule is null) continue;
+
+        if (schedule.Frequency == "weekly")
+        {
+            var targetWeekday = (DayOfWeek)(schedule.Weekday ?? 0);
+            var current = inicio;
+            var daysToAdd = ((int)targetWeekday - (int)current.DayOfWeek + 7) % 7;
+            var scheduledDate = current.AddDays(daysToAdd);
+
+            while (scheduledDate <= fim)
+            {
+                var periodEnd = scheduledDate;
+                var periodStart = scheduledDate.AddDays(-6);
+
+                var rotasInPeriod = await db.Rotas
+                    .Include(r => r.Pnrs)
+                    .Where(r => r.TransportadoraId == t.Id && r.DataRota >= periodStart && r.DataRota <= periodEnd)
+                    .ToListAsync();
+
+                var ganhosBrutos = rotasInPeriod.Sum(r => r.ValorTotalCalculado);
+                var descontosPnr = rotasInPeriod.SelectMany(r => r.Pnrs).Sum(p => p.ValorDesconto);
+                var amountDue = ganhosBrutos - descontosPnr;
+
+                var payment = await db.Payments.FirstOrDefaultAsync(p => p.TransportadoraId == t.Id && p.PeriodStart == periodStart && p.PeriodEnd == periodEnd);
+
+                results.Add(new PaymentListItemResponse(
+                    t.Id,
+                    t.Nome,
+                    periodStart,
+                    periodEnd,
+                    scheduledDate,
+                    ganhosBrutos,
+                    descontosPnr,
+                    amountDue,
+                    payment?.AmountReceived,
+                    payment?.ReceivedAt,
+                    payment is not null
+                ));
+
+                scheduledDate = scheduledDate.AddDays(7);
+            }
+        }
+        else if (schedule.Frequency == "quinzena")
+        {
+            var iterateMonth = new DateOnly(inicio.Year, inicio.Month, 1);
+            while (iterateMonth <= fim)
+            {
+                var year = iterateMonth.Year;
+                var month = iterateMonth.Month;
+                var lastDay = DateTime.DaysInMonth(year, month);
+                var preferredDay = schedule.DayOfMonth ?? 15;
+                var firstDay = Math.Min(preferredDay, lastDay);
+                var firstHalfScheduled = new DateOnly(year, month, firstDay);
+
+                if (firstHalfScheduled >= inicio && firstHalfScheduled <= fim)
+                {
+                    var periodStart = new DateOnly(year, month, 1);
+                    var periodEnd = firstHalfScheduled;
+                    var rotasInPeriod = await db.Rotas.Include(r => r.Pnrs).Where(r => r.TransportadoraId == t.Id && r.DataRota >= periodStart && r.DataRota <= periodEnd).ToListAsync();
+                    var ganhosBrutos = rotasInPeriod.Sum(r => r.ValorTotalCalculado);
+                    var descontosPnr = rotasInPeriod.SelectMany(r => r.Pnrs).Sum(p => p.ValorDesconto);
+                    var amountDue = ganhosBrutos - descontosPnr;
+                    var payment = await db.Payments.FirstOrDefaultAsync(p => p.TransportadoraId == t.Id && p.PeriodStart == periodStart && p.PeriodEnd == periodEnd);
+                    results.Add(new PaymentListItemResponse(t.Id, t.Nome, periodStart, periodEnd, firstHalfScheduled, ganhosBrutos, descontosPnr, amountDue, payment?.AmountReceived, payment?.ReceivedAt, payment is not null));
+                }
+
+                if (firstDay < lastDay)
+                {
+                    var secondHalfScheduled = new DateOnly(year, month, lastDay);
+                    var periodStart = new DateOnly(year, month, firstDay + 1);
+                    var periodEnd = secondHalfScheduled;
+
+                    if (secondHalfScheduled >= inicio && secondHalfScheduled <= fim)
+                    {
+                        var rotasInPeriod = await db.Rotas.Include(r => r.Pnrs).Where(r => r.TransportadoraId == t.Id && r.DataRota >= periodStart && r.DataRota <= periodEnd).ToListAsync();
+                        var ganhosBrutos = rotasInPeriod.Sum(r => r.ValorTotalCalculado);
+                        var descontosPnr = rotasInPeriod.SelectMany(r => r.Pnrs).Sum(p => p.ValorDesconto);
+                        var amountDue = ganhosBrutos - descontosPnr;
+                        var payment = await db.Payments.FirstOrDefaultAsync(p => p.TransportadoraId == t.Id && p.PeriodStart == periodStart && p.PeriodEnd == periodEnd);
+                        results.Add(new PaymentListItemResponse(t.Id, t.Nome, periodStart, periodEnd, secondHalfScheduled, ganhosBrutos, descontosPnr, amountDue, payment?.AmountReceived, payment?.ReceivedAt, payment is not null));
+                    }
+                }
+
+                iterateMonth = iterateMonth.AddMonths(1);
+            }
+        }
+    }
+
+    var ordered = results.OrderBy(x => x.ScheduledDate).ThenBy(x => x.TransportadoraNome).ToList();
+    return Results.Ok(ordered);
+});
+
+app.MapPost("/api/payments", async (AppDbContext db, PaymentCreateRequest request) =>
+{
+    var transportadora = await db.Transportadoras.FindAsync(request.TransportadoraId);
+    if (transportadora is null)
+    {
+        return Results.BadRequest("Transportadora inválida.");
+    }
+
+    var rotasInPeriod = await db.Rotas.Include(r => r.Pnrs)
+        .Where(r => r.TransportadoraId == request.TransportadoraId && r.DataRota >= request.PeriodStart && r.DataRota <= request.PeriodEnd)
+        .ToListAsync();
+
+    var ganhosBrutos = rotasInPeriod.Sum(r => r.ValorTotalCalculado);
+    var descontosPnr = rotasInPeriod.SelectMany(r => r.Pnrs).Sum(p => p.ValorDesconto);
+    var amountDue = ganhosBrutos - descontosPnr;
+
+    if (amountDue != request.AmountReceived)
+    {
+        return Results.BadRequest("Valor recebido deve ser igual ao valor devido. Pagamentos parciais não são permitidos.");
+    }
+
+    var exists = await db.Payments.AnyAsync(p => p.TransportadoraId == request.TransportadoraId && p.PeriodStart == request.PeriodStart && p.PeriodEnd == request.PeriodEnd);
+    if (exists)
+    {
+        return Results.Conflict("Pagamento já registrado para este período.");
+    }
+
+    var payment = new Payment
+    {
+        TransportadoraId = request.TransportadoraId,
+        PeriodStart = request.PeriodStart,
+        PeriodEnd = request.PeriodEnd,
+        ScheduledDate = request.PeriodEnd,
+        AmountReceived = request.AmountReceived,
+        ReceivedAt = DateTime.UtcNow,
+        Notes = request.Notes,
+        CreatedAt = DateTime.UtcNow
+    };
+
+    db.Payments.Add(payment);
+    await db.SaveChangesAsync();
+
+    return Results.Created($"/api/payments/{payment.Id}", payment);
+});
+
 app.MapGet("/api/dashboard/summary", async (AppDbContext db, DateOnly? startDate = null, DateOnly? endDate = null, int? transportadoraId = null, bool onlyActive = false) =>
 {
     var inicio = startDate ?? DateOnly.FromDateTime(DateTime.Today);
@@ -442,6 +668,8 @@ app.MapGet("/api/dashboard/historico", async (AppDbContext db, DateOnly? startDa
 
 app.MapPost("/api/clear-test-data", async (AppDbContext db) =>
 {
+    db.PaymentSchedules.RemoveRange(db.PaymentSchedules);
+    db.Payments.RemoveRange(db.Payments);
     db.Transportadoras.RemoveRange(db.Transportadoras);
     db.Rotas.RemoveRange(db.Rotas);
     db.Pnrs.RemoveRange(db.Pnrs);
@@ -488,6 +716,8 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
     public DbSet<Transportadora> Transportadoras => Set<Transportadora>();
     public DbSet<Rota> Rotas => Set<Rota>();
     public DbSet<Pnr> Pnrs => Set<Pnr>();
+    public DbSet<PaymentSchedule> PaymentSchedules => Set<PaymentSchedule>();
+    public DbSet<Payment> Payments => Set<Payment>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -497,6 +727,12 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
         modelBuilder.Entity<Rota>().Property(x => x.ValorPorPacote).HasColumnType("decimal(18,2)");
         modelBuilder.Entity<Pnr>().Property(x => x.ValorDesconto).HasColumnType("decimal(18,2)");
         modelBuilder.Entity<Pnr>().Property(x => x.Observacao).HasMaxLength(300);
+        modelBuilder.Entity<PaymentSchedule>().Property(x => x.Frequency).HasMaxLength(20).IsRequired();
+        modelBuilder.Entity<PaymentSchedule>().Property(x => x.Weekday);
+        modelBuilder.Entity<PaymentSchedule>().Property(x => x.DayOfMonth);
+
+        modelBuilder.Entity<Payment>().Property(x => x.AmountReceived).HasColumnType("decimal(18,2)");
+        modelBuilder.Entity<Payment>().Property(x => x.Notes).HasMaxLength(300);
     }
 }
 
@@ -507,6 +743,7 @@ public class Transportadora
     public bool Ativa { get; set; } = true;
     public DateTime CreatedAt { get; set; }
     public List<Rota> Rotas { get; set; } = [];
+    public PaymentSchedule? PaymentSchedule { get; set; }
 }
 
 public class Rota
@@ -534,10 +771,57 @@ public class Pnr
     public DateTime CreatedAt { get; set; }
 }
 
+public class PaymentSchedule
+{
+    public int Id { get; set; }
+    public int TransportadoraId { get; set; }
+    public Transportadora Transportadora { get; set; } = null!;
+    // "weekly" or "quinzena"
+    public string Frequency { get; set; } = string.Empty;
+    // 0 = Sunday .. 6 = Saturday (used when Frequency == "weekly")
+    public int? Weekday { get; set; }
+    // 1..31 (used when Frequency == "quinzena")
+    public int? DayOfMonth { get; set; }
+    public DateTime CreatedAt { get; set; }
+}
+
+public class Payment
+{
+    public int Id { get; set; }
+    public int TransportadoraId { get; set; }
+    public Transportadora Transportadora { get; set; } = null!;
+    public DateOnly PeriodStart { get; set; }
+    public DateOnly PeriodEnd { get; set; }
+    public DateOnly ScheduledDate { get; set; }
+    public decimal AmountReceived { get; set; }
+    public DateTime ReceivedAt { get; set; }
+    public string? Notes { get; set; }
+    public DateTime CreatedAt { get; set; }
+}
+
 public record TransportadoraCreateRequest(string Nome);
 public record TransportadoraUpdateRequest(string Nome, bool Ativa);
 public record RotaCreateRequest(int TransportadoraId, DateOnly DataRota, decimal? ValorFixo, decimal? ValorPorPacote, int QuantidadePacotes);
 public record PnrCreateRequest(int RotaId, DateOnly DataPnr, decimal ValorDesconto, string? Observacao);
+
+public record PaymentScheduleRequest(string Frequency, int? Weekday, int? DayOfMonth);
+public record PaymentScheduleResponse(string Frequency, int? Weekday, int? DayOfMonth);
+
+public record PaymentCreateRequest(int TransportadoraId, DateOnly PeriodStart, DateOnly PeriodEnd, decimal AmountReceived, string? Notes);
+
+public record PaymentListItemResponse(
+    int TransportadoraId,
+    string TransportadoraNome,
+    DateOnly PeriodStart,
+    DateOnly PeriodEnd,
+    DateOnly ScheduledDate,
+    decimal GanhosBrutos,
+    decimal DescontosPnr,
+    decimal AmountDue,
+    decimal? AmountReceived,
+    DateTime? ReceivedAt,
+    bool Paid
+);
 
 public record RotaResponse(
     int Id,

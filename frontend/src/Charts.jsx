@@ -322,3 +322,65 @@ export function TipoRotaChart({ rotas }) {
     </div>
   )
 }
+
+// Gráfico simples: Recebido vs Pendente (a partir da lista de payments)
+export function PaymentsOverviewChart({ payments }) {
+  if (!payments) return null
+
+  const totalReceived = payments.reduce((acc, p) => acc + (Number(p.amountReceived ?? 0) || 0), 0)
+  const totalPending = payments.reduce((acc, p) => acc + ((p.paid ? 0 : Number(p.amountDue ?? 0)) || 0), 0)
+
+  const data = {
+    labels: ['Recebido', 'Pendente'],
+    datasets: [
+      {
+        data: [totalReceived, totalPending],
+        backgroundColor: ['rgba(40, 167, 69, 0.85)', 'rgba(255, 159, 64, 0.85)'],
+        borderColor: ['rgba(40, 167, 69, 1)', 'rgba(255, 159, 64, 1)'],
+        borderWidth: 1,
+      },
+    ],
+  }
+
+  const options = {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: {
+        position: 'bottom',
+      },
+      title: {
+        display: true,
+        text: 'Recebimentos / Pendente',
+        font: { size: 16 },
+      },
+      tooltip: {
+        callbacks: {
+          label: function (context) {
+            const label = context.label || ''
+            const value = context.parsed || 0
+            return label + ': ' + formatCurrency(value)
+          },
+        },
+      },
+    },
+  }
+
+  return (
+    <div style={{ height: '360px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+      <div style={{ width: '320px', height: '240px' }}>
+        <Doughnut data={data} options={options} />
+      </div>
+      <div style={{ marginTop: '12px', display: 'flex', gap: '24px' }}>
+        <div>
+          <div style={{ color: '#28a745' }}>Recebido</div>
+          <strong>{formatCurrency(totalReceived)}</strong>
+        </div>
+        <div>
+          <div style={{ color: '#ff9f40' }}>Pendente</div>
+          <strong>{formatCurrency(totalPending)}</strong>
+        </div>
+      </div>
+    </div>
+  )
+}
