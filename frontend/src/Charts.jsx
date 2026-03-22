@@ -84,7 +84,7 @@ export function SummaryChart({ summary }) {
   }
 
   return (
-    <div style={{ height: '300px', marginBottom: '20px' }}>
+    <div className="chart-wrapper">
       <Bar data={data} options={options} />
     </div>
   )
@@ -167,7 +167,7 @@ export function PrevisaoChart({ previsao }) {
   }
 
   return (
-    <div style={{ height: '350px', marginBottom: '20px' }}>
+    <div className="chart-wrapper-tall">
       <Bar data={data} options={options} />
     </div>
   )
@@ -264,7 +264,7 @@ export function HistoricoChart({ historico }) {
   }
 
   return (
-    <div style={{ height: '350px', marginBottom: '20px' }}>
+    <div className="chart-wrapper-tall">
       <Line data={data} options={options} />
     </div>
   )
@@ -317,7 +317,7 @@ export function TipoRotaChart({ rotas }) {
   }
 
   return (
-    <div style={{ height: '300px', marginBottom: '20px', maxWidth: '400px', margin: '0 auto' }}>
+    <div className="chart-wrapper chart-donut">
       <Doughnut data={data} options={options} />
     </div>
   )
@@ -367,11 +367,11 @@ export function PaymentsOverviewChart({ payments }) {
   }
 
   return (
-    <div style={{ height: '360px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
-      <div style={{ width: '320px', height: '240px' }}>
+    <div className="chart-wrapper-payments">
+      <div className="chart-donut-inner">
         <Doughnut data={data} options={options} />
       </div>
-      <div style={{ marginTop: '12px', display: 'flex', gap: '24px' }}>
+      <div className="chart-payments-summary">
         <div>
           <div style={{ color: '#28a745' }}>Recebido</div>
           <strong>{formatCurrency(totalReceived)}</strong>
