@@ -224,6 +224,7 @@ export default function App() {
       </main>
 
       <nav className="bottom-nav">
+        <div className="sidebar-logo">SCGTR</div>
         {TABS.map(({ id, label, Icon }) => (
           <button
             key={id}
@@ -379,7 +380,7 @@ function AgendaTab({ transportadoras, onError }) {
           <div key={dateStr} className="payment-group">
             <div className="payment-group-header">
               <span className="payment-group-date">{date}</span>
-              <span className={`payment-group-label ${type}`}>{label}</span>
+              {!allPaid && <span className={`payment-group-label ${type}`}>{label}</span>}
             </div>
 
             {items.map((p, idx) => {
