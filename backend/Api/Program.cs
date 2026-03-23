@@ -38,6 +38,15 @@ builder.Services.AddCors(options =>
                     return true;
                 }
 
+                // Allow local network (192.168.x.x, 10.x.x.x, 172.16-31.x.x)
+                if (System.Net.IPAddress.TryParse(uri.Host, out var ip))
+                {
+                    var bytes = ip.GetAddressBytes();
+                    if (bytes[0] == 192 && bytes[1] == 168) return true;
+                    if (bytes[0] == 10) return true;
+                    if (bytes[0] == 172 && bytes[1] >= 16 && bytes[1] <= 31) return true;
+                }
+
                 return uri.Host.EndsWith(".vercel.app", StringComparison.OrdinalIgnoreCase)
                     || uri.Host.EndsWith(".pages.dev", StringComparison.OrdinalIgnoreCase)
                     || uri.Host.EndsWith(".up.railway.app", StringComparison.OrdinalIgnoreCase);
@@ -53,6 +62,8 @@ using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
     db.Database.EnsureCreated();
+    // Add WeekStartDay column if it doesn't exist yet (safe to run on every startup)
+    try { db.Database.ExecuteSqlRaw("ALTER TABLE PaymentSchedules ADD COLUMN WeekStartDay INTEGER NULL"); } catch { /* already exists */ }
 }
 
 if (app.Environment.IsDevelopment())
@@ -71,10 +82,21 @@ app.MapGet("/api/transportadoras", async (AppDbContext db, bool includeInactive 
     }
 
     var transportadoras = await query
+        .Include(x => x.PaymentSchedule)
         .OrderBy(x => x.Nome)
         .ToListAsync();
 
-    return Results.Ok(transportadoras);
+    var result = transportadoras.Select(t => new TransportadoraListResponse(
+        t.Id,
+        t.Nome,
+        t.Ativa,
+        t.PaymentSchedule != null
+            ? new PaymentScheduleResponse(t.PaymentSchedule.Frequency, t.PaymentSchedule.Weekday, t.PaymentSchedule.DayOfMonth, t.PaymentSchedule.WeekStartDay)
+            : null,
+        t.CreatedAt
+    )).ToList();
+
+    return Results.Ok(result);
 });
 
 app.MapPost("/api/transportadoras", async (AppDbContext db, TransportadoraCreateRequest request) =>
@@ -117,6 +139,29 @@ app.MapPut("/api/transportadoras/{id:int}", async (AppDbContext db, int id, Tran
     return Results.Ok(transportadora);
 });
 
+app.MapDelete("/api/transportadoras/{id:int}", async (AppDbContext db, int id) =>
+{
+    var transportadora = await db.Transportadoras
+        .Include(t => t.Rotas)
+        .FirstOrDefaultAsync(t => t.Id == id);
+
+    if (transportadora is null) return Results.Problem("Transportadora não encontrada.", statusCode: 404);
+
+    if (transportadora.Rotas.Count > 0)
+        return Results.Problem("Não é possível excluir uma transportadora com rotas cadastradas. Inative-a primeiro.", statusCode: 400);
+
+    // Remove schedule and payments if exist
+    var schedule = await db.PaymentSchedules.FirstOrDefaultAsync(x => x.TransportadoraId == id);
+    if (schedule is not null) db.PaymentSchedules.Remove(schedule);
+
+    var payments = await db.Payments.Where(x => x.TransportadoraId == id).ToListAsync();
+    db.Payments.RemoveRange(payments);
+
+    db.Transportadoras.Remove(transportadora);
+    await db.SaveChangesAsync();
+    return Results.NoContent();
+});
+
 app.MapPatch("/api/transportadoras/{id:int}/inativar", async (AppDbContext db, int id) =>
 {
     var transportadora = await db.Transportadoras.FindAsync(id);
@@ -154,7 +199,7 @@ app.MapGet("/api/transportadoras/{id:int}/payment-schedule", async (AppDbContext
         return Results.NotFound();
     }
 
-    return Results.Ok(new PaymentScheduleResponse(schedule.Frequency, schedule.Weekday, schedule.DayOfMonth));
+    return Results.Ok(new PaymentScheduleResponse(schedule.Frequency, schedule.Weekday, schedule.DayOfMonth, schedule.WeekStartDay));
 });
 
 app.MapPut("/api/transportadoras/{id:int}/payment-schedule", async (AppDbContext db, int id, PaymentScheduleRequest request) =>
@@ -189,6 +234,7 @@ app.MapPut("/api/transportadoras/{id:int}/payment-schedule", async (AppDbContext
             Frequency = request.Frequency,
             Weekday = request.Weekday,
             DayOfMonth = request.DayOfMonth,
+            WeekStartDay = request.WeekStartDay,
             CreatedAt = DateTime.UtcNow
         };
 
@@ -199,10 +245,11 @@ app.MapPut("/api/transportadoras/{id:int}/payment-schedule", async (AppDbContext
         schedule.Frequency = request.Frequency;
         schedule.Weekday = request.Weekday;
         schedule.DayOfMonth = request.DayOfMonth;
+        schedule.WeekStartDay = request.WeekStartDay;
     }
 
     await db.SaveChangesAsync();
-    return Results.Ok(new PaymentScheduleResponse(schedule.Frequency, schedule.Weekday, schedule.DayOfMonth));
+    return Results.Ok(new PaymentScheduleResponse(schedule.Frequency, schedule.Weekday, schedule.DayOfMonth, schedule.WeekStartDay));
 });
 
 app.MapGet("/api/rotas", async (AppDbContext db, DateOnly? startDate = null, DateOnly? endDate = null, int? transportadoraId = null) =>
@@ -310,7 +357,7 @@ app.MapPut("/api/rotas/{id:int}", async (AppDbContext db, int id, RotaCreateRequ
     return Results.Ok(rota);
 });
 
-app.MapGet("/api/pnrs", async (AppDbContext db, int? rotaId = null) =>
+app.MapGet("/api/pnrs", async (AppDbContext db, int? rotaId = null, DateOnly? startDate = null, DateOnly? endDate = null) =>
 {
     var query = db.Pnrs
         .Include(x => x.Rota)
@@ -320,6 +367,16 @@ app.MapGet("/api/pnrs", async (AppDbContext db, int? rotaId = null) =>
     if (rotaId.HasValue)
     {
         query = query.Where(x => x.RotaId == rotaId.Value);
+    }
+
+    if (startDate.HasValue)
+    {
+        query = query.Where(x => x.Rota.DataRota >= startDate.Value);
+    }
+
+    if (endDate.HasValue)
+    {
+        query = query.Where(x => x.Rota.DataRota <= endDate.Value);
     }
 
     var pnrs = await query
@@ -421,8 +478,20 @@ app.MapGet("/api/payments", async (AppDbContext db, DateOnly? startDate = null, 
 
             while (scheduledDate <= fim)
             {
-                var periodEnd = scheduledDate;
-                var periodStart = scheduledDate.AddDays(-6);
+                DateOnly periodStart, periodEnd;
+                if (schedule.WeekStartDay.HasValue)
+                {
+                    // Period ends the day before the week start (i.e. week-end day)
+                    var weekEndDay = (schedule.WeekStartDay.Value - 1 + 7) % 7;
+                    var daysBack = ((int)scheduledDate.DayOfWeek - weekEndDay + 7) % 7;
+                    periodEnd = scheduledDate.AddDays(-daysBack);
+                    periodStart = periodEnd.AddDays(-6);
+                }
+                else
+                {
+                    periodEnd = scheduledDate;
+                    periodStart = scheduledDate.AddDays(-6);
+                }
 
                 var rotasInPeriod = await db.Rotas
                     .Include(r => r.Pnrs)
@@ -782,6 +851,8 @@ public class PaymentSchedule
     public int? Weekday { get; set; }
     // 1..31 (used when Frequency == "quinzena")
     public int? DayOfMonth { get; set; }
+    // 0 = Sunday .. 6 = Saturday — day the work week starts (weekly only)
+    public int? WeekStartDay { get; set; }
     public DateTime CreatedAt { get; set; }
 }
 
@@ -799,13 +870,14 @@ public class Payment
     public DateTime CreatedAt { get; set; }
 }
 
+public record TransportadoraListResponse(int Id, string Nome, bool Ativa, PaymentScheduleResponse? PaymentSchedule, DateTime CreatedAt);
 public record TransportadoraCreateRequest(string Nome);
 public record TransportadoraUpdateRequest(string Nome, bool Ativa);
 public record RotaCreateRequest(int TransportadoraId, DateOnly DataRota, decimal? ValorFixo, decimal? ValorPorPacote, int QuantidadePacotes);
 public record PnrCreateRequest(int RotaId, DateOnly DataPnr, decimal ValorDesconto, string? Observacao);
 
-public record PaymentScheduleRequest(string Frequency, int? Weekday, int? DayOfMonth);
-public record PaymentScheduleResponse(string Frequency, int? Weekday, int? DayOfMonth);
+public record PaymentScheduleRequest(string Frequency, int? Weekday, int? DayOfMonth, int? WeekStartDay);
+public record PaymentScheduleResponse(string Frequency, int? Weekday, int? DayOfMonth, int? WeekStartDay);
 
 public record PaymentCreateRequest(int TransportadoraId, DateOnly PeriodStart, DateOnly PeriodEnd, decimal AmountReceived, string? Notes);
 
