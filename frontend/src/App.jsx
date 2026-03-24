@@ -317,8 +317,8 @@ function AgendaTab({ transportadoras, onError }) {
   const sortedDates = Object.keys(grouped).sort()
 
   const FILTERS = [
-    { id: 'pending',  label: 'A receber' },
-    { id: 'upcoming', label: 'Próximos' },
+    { id: 'pending',  label: 'Pendentes' },
+    { id: 'upcoming', label: 'Futuros' },
     { id: 'paid',     label: 'Recebidos' },
     { id: 'all',      label: 'Todos' },
   ]
@@ -380,7 +380,7 @@ function AgendaTab({ transportadoras, onError }) {
           <div key={dateStr} className="payment-group">
             <div className="payment-group-header">
               <span className="payment-group-date">{date}</span>
-              {!allPaid && <span className={`payment-group-label ${type}`}>{label}</span>}
+              {!allPaid && type !== 'overdue' && <span className={`payment-group-label ${type}`}>{label}</span>}
             </div>
 
             {items.map((p, idx) => {
@@ -601,43 +601,56 @@ function HistoricoTab({ transportadorasAtivas, onError }) {
   const [pnrs, setPnrs] = useState([])
   const [summary, setSummary] = useState(null)
   const [historico, setHistorico] = useState([])
+  const [aReceber, setAReceber] = useState(0)
   const [loading, setLoading] = useState(true)
   const [showChart, setShowChart] = useState(false)
   const [days, setDays] = useState(30)
   const [editingRota, setEditingRota] = useState(null) // rota object being edited
+  const [selectedTransportadora, setSelectedTransportadora] = useState('')
 
-  const load = useCallback(async (d) => {
+  const load = useCallback(async (d, tId) => {
     setLoading(true)
     try {
       const end = todayStr()
       const start = addDays(end, -d)
-      const [rotasData, summaryData, historicoData, pnrsData] = await Promise.all([
-        request(`/rotas?startDate=${start}&endDate=${end}`),
-        request(`/dashboard/summary?startDate=${start}&endDate=${end}`),
-        request(`/dashboard/historico?startDate=${start}&endDate=${end}`),
+      const tParam = tId ? `&transportadoraId=${tId}` : ''
+      const broadStart = addDays(end, -365)
+      const broadEnd = addDays(end, 365)
+      const [rotasData, summaryData, historicoData, pnrsData, paymentsData] = await Promise.all([
+        request(`/rotas?startDate=${start}&endDate=${end}${tParam}`),
+        request(`/dashboard/summary?startDate=${start}&endDate=${end}${tParam}`),
+        request(`/dashboard/historico?startDate=${start}&endDate=${end}${tParam}`),
         request(`/pnrs?startDate=${start}&endDate=${end}`),
+        request(`/payments?startDate=${broadStart}&endDate=${broadEnd}${tParam}`),
       ])
       setRotas(rotasData)
       setSummary(summaryData)
       setHistorico(historicoData)
-      setPnrs(pnrsData)
+      if (tId) {
+        const tNome = transportadorasAtivas.find(t => String(t.id) === String(tId))?.nome
+        setPnrs(tNome ? pnrsData.filter(p => p.transportadoraNome === tNome) : pnrsData)
+      } else {
+        setPnrs(pnrsData)
+      }
+      const pending = paymentsData.filter(p => !p.paid && Number(p.amountDue ?? 0) > 0)
+      setAReceber(pending.reduce((s, p) => s + Number(p.amountDue), 0))
     } catch (err) {
       onError(err.message)
     } finally {
       setLoading(false)
     }
-  }, [onError])
+  }, [onError, transportadorasAtivas])
 
   const handleDeletePnr = async (id) => {
     try {
       await request(`/pnrs/${id}`, { method: 'DELETE' })
-      load(days)
+      load(days, selectedTransportadora)
     } catch (err) {
       onError(err.message)
     }
   }
 
-  useEffect(() => { load(days) }, [days, load])
+  useEffect(() => { load(days, selectedTransportadora) }, [days, selectedTransportadora, load])
 
   const RANGES = [
     { label: '7 dias', value: 7 },
@@ -664,6 +677,28 @@ function HistoricoTab({ transportadorasAtivas, onError }) {
           Gráfico
         </button>
       </div>
+      {transportadorasAtivas.length > 0 && (
+        <div style={{ marginBottom: 12 }}>
+          <select
+            value={selectedTransportadora}
+            onChange={e => setSelectedTransportadora(e.target.value)}
+            style={{
+              width: '100%',
+              padding: '8px 12px',
+              borderRadius: 8,
+              border: '1px solid var(--border-color)',
+              background: 'var(--bg-card)',
+              color: 'var(--text-primary)',
+              fontSize: 14,
+            }}
+          >
+            <option value="">Todas as transportadoras</option>
+            {transportadorasAtivas.map(t => (
+              <option key={t.id} value={String(t.id)}>{t.nome}</option>
+            ))}
+          </select>
+        </div>
+      )}
 
       {loading && <div className="loading-text">Carregando...</div>}
 
@@ -675,7 +710,7 @@ function HistoricoTab({ transportadorasAtivas, onError }) {
             <div className="metric-card"><span>Líquido</span><strong>{fmt(summary.ganhosLiquidos)}</strong></div>
             <div className="metric-card"><span>Rotas</span><strong>{summary.totalRotas}</strong></div>
             <div className="metric-card"><span>Pacotes</span><strong>{summary.totalPacotes}</strong></div>
-            <div className="metric-card"><span>Média/dia</span><strong>{fmt(days > 0 ? summary.ganhosLiquidos / days : 0)}</strong></div>
+            <div className="metric-card"><span>A receber</span><strong>{fmt(aReceber)}</strong></div>
           </div>
 
           {showChart && historico.length > 0 && (
@@ -792,15 +827,8 @@ function EditRotaModal({ rota, transportadorasAtivas, onClose, onSaved, onError 
   }
 
   return (
-    <div style={{
-      position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)',
-      display: 'flex', alignItems: 'flex-end', justifyContent: 'center',
-      zIndex: 100, padding: '0 0 env(safe-area-inset-bottom)',
-    }}>
-      <div style={{
-        background: 'var(--bg-card)', borderRadius: '16px 16px 0 0',
-        padding: 20, width: '100%', maxWidth: 600, maxHeight: '90dvh', overflowY: 'auto',
-      }}>
+    <div className="modal-overlay">
+      <div className="modal-sheet">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
           <h2 style={{ margin: 0, fontSize: 18 }}>Editar Rota #{rota.id}</h2>
           <button className="btn-ghost btn-small" onClick={onClose}>✕</button>
@@ -1117,20 +1145,8 @@ function ConfigTab({ transportadoras, onRefresh, onError }) {
 
       {/* Schedule Modal */}
       {showScheduleModal && (
-        <div style={{
-          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)',
-          display: 'flex', alignItems: 'flex-end', justifyContent: 'center',
-          zIndex: 100, padding: '0 0 env(safe-area-inset-bottom)',
-        }}>
-          <div style={{
-            background: 'var(--bg-card)',
-            borderRadius: '16px 16px 0 0',
-            padding: 20,
-            width: '100%',
-            maxWidth: 600,
-            maxHeight: '90dvh',
-            overflowY: 'auto',
-          }}>
+        <div className="modal-overlay">
+          <div className="modal-sheet">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
               <h2 style={{ margin: 0, fontSize: 18 }}>Agendamento — {showScheduleModal.nome}</h2>
               <button className="btn-ghost btn-small" onClick={() => setShowScheduleModal(null)}>✕</button>
