@@ -371,12 +371,12 @@ app.MapGet("/api/pnrs", async (AppDbContext db, int? rotaId = null, DateOnly? st
 
     if (startDate.HasValue)
     {
-        query = query.Where(x => x.Rota.DataRota >= startDate.Value);
+        query = query.Where(x => x.DataPnr >= startDate.Value);
     }
 
     if (endDate.HasValue)
     {
-        query = query.Where(x => x.Rota.DataRota <= endDate.Value);
+        query = query.Where(x => x.DataPnr <= endDate.Value);
     }
 
     var pnrs = await query
@@ -646,12 +646,14 @@ app.MapGet("/api/dashboard/summary", async (AppDbContext db, DateOnly? startDate
     var ganhosBrutos = rotas.Sum(x => x.ValorTotalCalculado);
     var descontosPnr = rotas.SelectMany(x => x.Pnrs).Sum(x => x.ValorDesconto);
     var totalPacotes = rotas.Sum(x => x.QuantidadePacotes);
+    var diasTrabalhados = rotas.Select(x => x.DataRota).Distinct().Count();
 
     return Results.Ok(new DashboardSummaryResponse(
         inicio,
         fim,
         rotas.Count,
         totalPacotes,
+        diasTrabalhados,
         ganhosBrutos,
         descontosPnr,
         ganhosBrutos - descontosPnr
@@ -925,6 +927,7 @@ public record DashboardSummaryResponse(
     DateOnly EndDate,
     int TotalRotas,
     int TotalPacotes,
+    int DiasTrabalhos,
     decimal GanhosBrutos,
     decimal DescontosPnr,
     decimal GanhosLiquidos
