@@ -106,9 +106,17 @@ app.MapPost("/api/transportadoras", async (AppDbContext db, TransportadoraCreate
         return Results.BadRequest("Nome é obrigatório.");
     }
 
+    var nomeTrimmed = request.Nome.Trim();
+    var duplicada = await db.Transportadoras
+        .AnyAsync(t => t.Nome.ToLower() == nomeTrimmed.ToLower());
+    if (duplicada)
+    {
+        return Results.Conflict("Já existe uma transportadora com esse nome.");
+    }
+
     var transportadora = new Transportadora
     {
-        Nome = request.Nome.Trim(),
+        Nome = nomeTrimmed,
         Ativa = true,
         CreatedAt = DateTime.UtcNow
     };
@@ -132,7 +140,15 @@ app.MapPut("/api/transportadoras/{id:int}", async (AppDbContext db, int id, Tran
         return Results.BadRequest("Nome é obrigatório.");
     }
 
-    transportadora.Nome = request.Nome.Trim();
+    var nomeTrimmedPut = request.Nome.Trim();
+    var duplicadaPut = await db.Transportadoras
+        .AnyAsync(t => t.Id != id && t.Nome.ToLower() == nomeTrimmedPut.ToLower());
+    if (duplicadaPut)
+    {
+        return Results.Conflict("Já existe uma transportadora com esse nome.");
+    }
+
+    transportadora.Nome = nomeTrimmedPut;
     transportadora.Ativa = request.Ativa;
     await db.SaveChangesAsync();
 

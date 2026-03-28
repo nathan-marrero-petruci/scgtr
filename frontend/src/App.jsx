@@ -141,6 +141,12 @@ export default function App() {
   const [agendaRefreshKey, setAgendaRefreshKey] = useState(0)
 
   useEffect(() => {
+    if (!error) return
+    const t = setTimeout(() => setError(''), 5000)
+    return () => clearTimeout(t)
+  }, [error])
+
+  useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme)
     localStorage.setItem('theme', theme)
   }, [theme])
@@ -911,6 +917,7 @@ function ConfigTab({ transportadoras, onRefresh, onError }) {
   const [rotas, setRotas] = useState([])
   const [saving, setSaving] = useState(false)
   const [deletingCarrierId, setDeletingCarrierId] = useState(null)
+  const [carrierError, setCarrierError] = useState('')
 
   useEffect(() => {
     if (showPnr && rotas.length === 0) {
@@ -937,6 +944,7 @@ function ConfigTab({ transportadoras, onRefresh, onError }) {
   const handleCreateCarrier = async (e) => {
     e.preventDefault()
     setSaving(true)
+    setCarrierError('')
     try {
       await request('/transportadoras', {
         method: 'POST',
@@ -946,7 +954,7 @@ function ConfigTab({ transportadoras, onRefresh, onError }) {
       setShowAddCarrier(false)
       await onRefresh()
     } catch (err) {
-      onError(err.message)
+      setCarrierError(err.message)
     } finally {
       setSaving(false)
     }
@@ -1067,20 +1075,28 @@ function ConfigTab({ transportadoras, onRefresh, onError }) {
             + Adicionar transportadora
           </button>
         ) : (
-          <form onSubmit={handleCreateCarrier} style={{ marginTop: 12, display: 'flex', gap: 8 }}>
-            <input
-              value={carrierForm.nome}
-              onChange={e => setCarrierForm({ nome: e.target.value })}
-              placeholder="Nome da transportadora"
-              required
-              autoFocus
-            />
-            <button type="submit" disabled={saving} style={{ whiteSpace: 'nowrap', flexShrink: 0 }}>
-              {saving ? '...' : 'Salvar'}
-            </button>
-            <button type="button" className="btn-ghost" onClick={() => setShowAddCarrier(false)} style={{ flexShrink: 0 }}>
-              ✕
-            </button>
+          <form onSubmit={handleCreateCarrier} style={{ marginTop: 12 }}>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <input
+                value={carrierForm.nome}
+                onChange={e => { setCarrierForm({ nome: e.target.value }); setCarrierError('') }}
+                placeholder="Nome da transportadora"
+                required
+                autoFocus
+                style={carrierError ? { borderColor: 'var(--badge-overdue-border, #c0392b)' } : undefined}
+              />
+              <button type="submit" disabled={saving} style={{ whiteSpace: 'nowrap', flexShrink: 0 }}>
+                {saving ? '...' : 'Salvar'}
+              </button>
+              <button type="button" className="btn-ghost" onClick={() => { setShowAddCarrier(false); setCarrierError('') }} style={{ flexShrink: 0 }}>
+                ✕
+              </button>
+            </div>
+            {carrierError && (
+              <p style={{ margin: '6px 0 0', fontSize: 13, color: 'var(--badge-overdue-text, #e74c3c)' }}>
+                {carrierError}
+              </p>
+            )}
           </form>
         )}
       </div>
