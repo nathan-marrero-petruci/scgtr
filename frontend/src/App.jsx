@@ -73,7 +73,11 @@ const getDateLabel = (dateStr) => {
   return { date: `${dayName}, ${formatted}`, label: `em ${diffDays} dias`, type: 'normal' }
 }
 
-const todayStr = () => new Date().toISOString().slice(0, 10)
+const todayStr = () => {
+  const d = new Date()
+  const pad = n => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+}
 
 const addDays = (dateStr, days) => {
   const [y, m, d] = dateStr.split('-').map(Number)
@@ -135,6 +139,12 @@ export default function App() {
   const [error, setError] = useState('')
   // bump this to force AgendaTab to re-fetch (e.g. after saving config)
   const [agendaRefreshKey, setAgendaRefreshKey] = useState(0)
+
+  useEffect(() => {
+    if (!error) return
+    const t = setTimeout(() => setError(''), 5000)
+    return () => clearTimeout(t)
+  }, [error])
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme)
@@ -246,16 +256,16 @@ export default function App() {
 function AgendaTab({ transportadoras, onError }) {
   const [payments, setPayments] = useState([])
   const [loading, setLoading] = useState(true)
-  // 'pending' = tudo não pago com valor > 0 | 'upcoming' = só futuros | 'paid' = recebidos | 'all' = todos
-  const [filter, setFilter] = useState('pending')
+  // 'overdue' = atrasados (scheduledDate < hoje) | 'upcoming' = só futuros | 'paid' = recebidos | 'all' = todos
+  const [filter, setFilter] = useState('upcoming')
   const [confirmingId, setConfirmingId] = useState(null)
 
   const fetchPayments = useCallback(async () => {
     setLoading(true)
     try {
       const today = todayStr()
-      const start = addDays(today, -60) // pega atrasados dos últimos 2 meses
-      const end = addDays(today, 30)    // próximos 30 dias
+      const start = addDays(today, -365) // cobre atrasados de até 1 ano atrás
+      const end = addDays(today, 30)     // próximos 30 dias
       const data = await request(`/payments?startDate=${start}&endDate=${end}`)
       setPayments(data)
     } catch (err) {
@@ -297,14 +307,12 @@ function AgendaTab({ transportadoras, onError }) {
   const semAgendamento = transportadoras.filter(t => t.ativa && !carriersWithPayments.has(t.id))
 
   const filtered = payments.filter(p => {
-    // Nunca exibir entradas sem valor E não pagas (semanas sem rotas cadastradas)
     const temValor = Number(p.amountDue ?? 0) > 0 || p.paid
-    if (!temValor) return false
 
-    if (filter === 'pending')  return !p.paid  // tudo não pago que tem valor (inclui atrasados)
-    if (filter === 'upcoming') return p.scheduledDate >= today && !p.paid  // só futuros
+    if (filter === 'overdue')  return temValor && !p.paid && p.scheduledDate < today
+    if (filter === 'upcoming') return temValor && p.scheduledDate >= today && !p.paid
     if (filter === 'paid')     return p.paid
-    return true
+    return temValor
   })
 
   // Group by scheduledDate
@@ -317,9 +325,9 @@ function AgendaTab({ transportadoras, onError }) {
   const sortedDates = Object.keys(grouped).sort()
 
   const FILTERS = [
-    { id: 'pending',  label: 'Pendentes' },
     { id: 'upcoming', label: 'Futuros' },
     { id: 'paid',     label: 'Recebidos' },
+    { id: 'overdue',  label: 'Atrasados' },
     { id: 'all',      label: 'Todos' },
   ]
 
@@ -601,27 +609,24 @@ function HistoricoTab({ transportadorasAtivas, onError }) {
   const [pnrs, setPnrs] = useState([])
   const [summary, setSummary] = useState(null)
   const [historico, setHistorico] = useState([])
-  const [aReceber, setAReceber] = useState(0)
+
   const [loading, setLoading] = useState(true)
   const [showChart, setShowChart] = useState(false)
-  const [days, setDays] = useState(30)
+  const [startDate, setStartDate] = useState(() => addDays(todayStr(), -30))
+  const [endDate, setEndDate] = useState(todayStr)
+  const [activePreset, setActivePreset] = useState(30)
   const [editingRota, setEditingRota] = useState(null) // rota object being edited
   const [selectedTransportadora, setSelectedTransportadora] = useState('')
 
-  const load = useCallback(async (d, tId) => {
+  const load = useCallback(async (start, end, tId) => {
     setLoading(true)
     try {
-      const end = todayStr()
-      const start = addDays(end, -d)
       const tParam = tId ? `&transportadoraId=${tId}` : ''
-      const broadStart = addDays(end, -365)
-      const broadEnd = addDays(end, 365)
-      const [rotasData, summaryData, historicoData, pnrsData, paymentsData] = await Promise.all([
+      const [rotasData, summaryData, historicoData, pnrsData] = await Promise.all([
         request(`/rotas?startDate=${start}&endDate=${end}${tParam}`),
         request(`/dashboard/summary?startDate=${start}&endDate=${end}${tParam}`),
         request(`/dashboard/historico?startDate=${start}&endDate=${end}${tParam}`),
         request(`/pnrs?startDate=${start}&endDate=${end}`),
-        request(`/payments?startDate=${broadStart}&endDate=${broadEnd}${tParam}`),
       ])
       setRotas(rotasData)
       setSummary(summaryData)
@@ -632,8 +637,6 @@ function HistoricoTab({ transportadorasAtivas, onError }) {
       } else {
         setPnrs(pnrsData)
       }
-      const pending = paymentsData.filter(p => !p.paid && Number(p.amountDue ?? 0) > 0)
-      setAReceber(pending.reduce((s, p) => s + Number(p.amountDue), 0))
     } catch (err) {
       onError(err.message)
     } finally {
@@ -644,73 +647,89 @@ function HistoricoTab({ transportadorasAtivas, onError }) {
   const handleDeletePnr = async (id) => {
     try {
       await request(`/pnrs/${id}`, { method: 'DELETE' })
-      load(days, selectedTransportadora)
+      load(startDate, endDate, selectedTransportadora)
     } catch (err) {
       onError(err.message)
     }
   }
 
-  useEffect(() => { load(days, selectedTransportadora) }, [days, selectedTransportadora, load])
+  useEffect(() => { if (startDate && endDate) load(startDate, endDate, selectedTransportadora) }, [startDate, endDate, selectedTransportadora, load])
 
-  const RANGES = [
-    { label: '7 dias', value: 7 },
-    { label: '30 dias', value: 30 },
-    { label: '90 dias', value: 90 },
-  ]
+  const applyPreset = (d) => {
+    const end = todayStr()
+    setStartDate(addDays(end, -d))
+    setEndDate(end)
+    setActivePreset(d)
+  }
 
   return (
     <div>
-      <div className="agenda-filter">
-        {RANGES.map(r => (
+      <div className="historico-filters">
+        <div className="historico-filters-row">
+          <div className="historico-presets">
+            {[7, 15, 30, 90].map(d => (
+              <button
+                key={d}
+                className={`filter-chip ${activePreset === d ? 'active' : ''}`}
+                onClick={() => applyPreset(d)}
+              >{d}d</button>
+            ))}
+          </div>
           <button
-            key={r.value}
-            className={`filter-chip ${days === r.value ? 'active' : ''}`}
-            onClick={() => setDays(r.value)}
+            className={`filter-chip ${showChart ? 'active' : ''}`}
+            onClick={() => setShowChart(v => !v)}
           >
-            {r.label}
+            Gráfico
           </button>
-        ))}
-        <button
-          className={`filter-chip ${showChart ? 'active' : ''}`}
-          onClick={() => setShowChart(v => !v)}
-        >
-          Gráfico
-        </button>
-      </div>
-      {transportadorasAtivas.length > 0 && (
-        <div style={{ marginBottom: 12 }}>
+        </div>
+        <div className="historico-dates">
+          <div className="historico-date-field">
+            <span>De</span>
+            <input
+              type="date"
+              value={startDate}
+              max={endDate}
+              className={!startDate ? 'input-error' : ''}
+              onChange={e => { setStartDate(e.target.value); setActivePreset(null) }}
+            />
+            {!startDate && <span className="date-required">Data obrigatória</span>}
+          </div>
+          <div className="historico-date-field">
+            <span>Até</span>
+            <input
+              type="date"
+              value={endDate}
+              min={startDate}
+              className={!endDate ? 'input-error' : ''}
+              onChange={e => { setEndDate(e.target.value); setActivePreset(null) }}
+            />
+            {!endDate && <span className="date-required">Data obrigatória</span>}
+          </div>
+        </div>
+        {transportadorasAtivas.length > 0 && (
           <select
             value={selectedTransportadora}
             onChange={e => setSelectedTransportadora(e.target.value)}
-            style={{
-              width: '100%',
-              padding: '8px 12px',
-              borderRadius: 8,
-              border: '1px solid var(--border-color)',
-              background: 'var(--bg-card)',
-              color: 'var(--text-primary)',
-              fontSize: 14,
-            }}
           >
             <option value="">Todas as transportadoras</option>
             {transportadorasAtivas.map(t => (
               <option key={t.id} value={String(t.id)}>{t.nome}</option>
             ))}
           </select>
-        </div>
-      )}
+        )}
+      </div>
 
       {loading && <div className="loading-text">Carregando...</div>}
 
       {!loading && summary && (
         <>
           <div className="metrics-grid" style={{ gridTemplateColumns: 'repeat(3, 1fr)', marginBottom: 12 }}>
+            <div className="metric-card"><span>Rotas</span><strong>{summary.totalRotas}</strong></div>
+            <div className="metric-card"><span>Pacotes</span><strong>{summary.totalPacotes}</strong></div>
+            <div className="metric-card"><span>Dias trabalhados</span><strong>{summary.diasTrabalhos}</strong></div>
             <div className="metric-card"><span>Bruto</span><strong>{fmt(summary.ganhosBrutos)}</strong></div>
             <div className="metric-card"><span>Descontos</span><strong>{fmt(summary.descontosPnr)}</strong></div>
             <div className="metric-card"><span>Líquido</span><strong>{fmt(summary.ganhosLiquidos)}</strong></div>
-            <div className="metric-card"><span>Rotas</span><strong>{summary.totalRotas}</strong></div>
-            <div className="metric-card"><span>Pacotes</span><strong>{summary.totalPacotes}</strong></div>
-            <div className="metric-card"><span>A receber</span><strong>{fmt(aReceber)}</strong></div>
           </div>
 
           {showChart && historico.length > 0 && (
@@ -777,7 +796,7 @@ function HistoricoTab({ transportadorasAtivas, onError }) {
           rota={editingRota}
           transportadorasAtivas={transportadorasAtivas}
           onClose={() => setEditingRota(null)}
-          onSaved={() => { setEditingRota(null); load(days) }}
+          onSaved={() => { setEditingRota(null); load(startDate, endDate, selectedTransportadora) }}
           onError={onError}
         />
       )}
@@ -898,6 +917,7 @@ function ConfigTab({ transportadoras, onRefresh, onError }) {
   const [rotas, setRotas] = useState([])
   const [saving, setSaving] = useState(false)
   const [deletingCarrierId, setDeletingCarrierId] = useState(null)
+  const [carrierError, setCarrierError] = useState('')
 
   useEffect(() => {
     if (showPnr && rotas.length === 0) {
@@ -924,6 +944,7 @@ function ConfigTab({ transportadoras, onRefresh, onError }) {
   const handleCreateCarrier = async (e) => {
     e.preventDefault()
     setSaving(true)
+    setCarrierError('')
     try {
       await request('/transportadoras', {
         method: 'POST',
@@ -933,7 +954,7 @@ function ConfigTab({ transportadoras, onRefresh, onError }) {
       setShowAddCarrier(false)
       await onRefresh()
     } catch (err) {
-      onError(err.message)
+      setCarrierError(err.message)
     } finally {
       setSaving(false)
     }
@@ -1054,20 +1075,28 @@ function ConfigTab({ transportadoras, onRefresh, onError }) {
             + Adicionar transportadora
           </button>
         ) : (
-          <form onSubmit={handleCreateCarrier} style={{ marginTop: 12, display: 'flex', gap: 8 }}>
-            <input
-              value={carrierForm.nome}
-              onChange={e => setCarrierForm({ nome: e.target.value })}
-              placeholder="Nome da transportadora"
-              required
-              autoFocus
-            />
-            <button type="submit" disabled={saving} style={{ whiteSpace: 'nowrap', flexShrink: 0 }}>
-              {saving ? '...' : 'Salvar'}
-            </button>
-            <button type="button" className="btn-ghost" onClick={() => setShowAddCarrier(false)} style={{ flexShrink: 0 }}>
-              ✕
-            </button>
+          <form onSubmit={handleCreateCarrier} style={{ marginTop: 12 }}>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <input
+                value={carrierForm.nome}
+                onChange={e => { setCarrierForm({ nome: e.target.value }); setCarrierError('') }}
+                placeholder="Nome da transportadora"
+                required
+                autoFocus
+                style={carrierError ? { borderColor: 'var(--badge-overdue-border, #c0392b)' } : undefined}
+              />
+              <button type="submit" disabled={saving} style={{ whiteSpace: 'nowrap', flexShrink: 0 }}>
+                {saving ? '...' : 'Salvar'}
+              </button>
+              <button type="button" className="btn-ghost" onClick={() => { setShowAddCarrier(false); setCarrierError('') }} style={{ flexShrink: 0 }}>
+                ✕
+              </button>
+            </div>
+            {carrierError && (
+              <p style={{ margin: '6px 0 0', fontSize: 13, color: 'var(--badge-overdue-text, #e74c3c)' }}>
+                {carrierError}
+              </p>
+            )}
           </form>
         )}
       </div>
