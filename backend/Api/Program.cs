@@ -106,9 +106,17 @@ app.MapPost("/api/transportadoras", async (AppDbContext db, TransportadoraCreate
         return Results.BadRequest("Nome é obrigatório.");
     }
 
+    var nomeTrimmed = request.Nome.Trim();
+    var duplicada = await db.Transportadoras
+        .AnyAsync(t => t.Nome.ToLower() == nomeTrimmed.ToLower());
+    if (duplicada)
+    {
+        return Results.Conflict("Já existe uma transportadora com esse nome.");
+    }
+
     var transportadora = new Transportadora
     {
-        Nome = request.Nome.Trim(),
+        Nome = nomeTrimmed,
         Ativa = true,
         CreatedAt = DateTime.UtcNow
     };
@@ -132,7 +140,15 @@ app.MapPut("/api/transportadoras/{id:int}", async (AppDbContext db, int id, Tran
         return Results.BadRequest("Nome é obrigatório.");
     }
 
-    transportadora.Nome = request.Nome.Trim();
+    var nomeTrimmedPut = request.Nome.Trim();
+    var duplicadaPut = await db.Transportadoras
+        .AnyAsync(t => t.Id != id && t.Nome.ToLower() == nomeTrimmedPut.ToLower());
+    if (duplicadaPut)
+    {
+        return Results.Conflict("Já existe uma transportadora com esse nome.");
+    }
+
+    transportadora.Nome = nomeTrimmedPut;
     transportadora.Ativa = request.Ativa;
     await db.SaveChangesAsync();
 
@@ -371,12 +387,12 @@ app.MapGet("/api/pnrs", async (AppDbContext db, int? rotaId = null, DateOnly? st
 
     if (startDate.HasValue)
     {
-        query = query.Where(x => x.Rota.DataRota >= startDate.Value);
+        query = query.Where(x => x.DataPnr >= startDate.Value);
     }
 
     if (endDate.HasValue)
     {
-        query = query.Where(x => x.Rota.DataRota <= endDate.Value);
+        query = query.Where(x => x.DataPnr <= endDate.Value);
     }
 
     var pnrs = await query
@@ -646,12 +662,14 @@ app.MapGet("/api/dashboard/summary", async (AppDbContext db, DateOnly? startDate
     var ganhosBrutos = rotas.Sum(x => x.ValorTotalCalculado);
     var descontosPnr = rotas.SelectMany(x => x.Pnrs).Sum(x => x.ValorDesconto);
     var totalPacotes = rotas.Sum(x => x.QuantidadePacotes);
+    var diasTrabalhados = rotas.Select(x => x.DataRota).Distinct().Count();
 
     return Results.Ok(new DashboardSummaryResponse(
         inicio,
         fim,
         rotas.Count,
         totalPacotes,
+        diasTrabalhados,
         ganhosBrutos,
         descontosPnr,
         ganhosBrutos - descontosPnr
@@ -925,6 +943,7 @@ public record DashboardSummaryResponse(
     DateOnly EndDate,
     int TotalRotas,
     int TotalPacotes,
+    int DiasTrabalhos,
     decimal GanhosBrutos,
     decimal DescontosPnr,
     decimal GanhosLiquidos
