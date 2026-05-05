@@ -36,14 +36,14 @@ export function SummaryChart({ summary }) {
     datasets: [
       {
         label: 'Ganhos Brutos',
-        data: [summary.ganhosBrutos],
+        data: [summary.grossEarnings],
         backgroundColor: 'rgba(54, 162, 235, 0.8)',
         borderColor: 'rgba(54, 162, 235, 1)',
         borderWidth: 1,
       },
       {
         label: 'Ganhos Liquidos',
-        data: [summary.ganhosLiquidos],
+        data: [summary.netEarnings],
         backgroundColor: 'rgba(75, 192, 192, 0.8)',
         borderColor: 'rgba(75, 192, 192, 1)',
         borderWidth: 1,
@@ -96,11 +96,11 @@ export function PrevisaoChart({ previsao }) {
 
   // Agrupar por transportadora
   const groupedData = previsao.reduce((acc, item) => {
-    const nome = item.transportadoraNome
-    if (!acc[nome]) {
-      acc[nome] = 0
+    const name = item.carrierName
+    if (!acc[name]) {
+      acc[name] = 0
     }
-    acc[nome] += item.ganhosLiquidos || 0
+    acc[name] += item.netEarnings || 0
     return acc
   }, {})
 
@@ -179,23 +179,16 @@ export function HistoricoChart({ historico }) {
 
   // Agrupar por data
   const groupedData = historico.reduce((acc, item) => {
-    // O formato pode ser 'data' (dashboard) ou 'dataPnr' (PNRs diretos)
-    const date = item.data || item.dataPnr?.split('T')[0]
+    const date = item.date
     if (!acc[date]) {
-      acc[date] = {
-        bruto: 0,
-        liquido: 0,
-      }
+      acc[date] = { bruto: 0, liquido: 0 }
     }
-    // Usar ganhosLiquidos se existir, senão valorFinal
-    acc[date].bruto += item.ganhosBrutos || 0
-    acc[date].liquido += item.ganhosLiquidos || item.valorFinal || 0
+    acc[date].bruto += item.grossEarnings || 0
+    acc[date].liquido += item.netEarnings || 0
     return acc
   }, {})
 
-  // Ordenar por data
   const sortedDates = Object.keys(groupedData).sort()
-  const valuesBruto = sortedDates.map((date) => groupedData[date].bruto)
   const valuesLiquido = sortedDates.map((date) => groupedData[date].liquido)
 
   // Calcular acumulado
@@ -206,7 +199,7 @@ export function HistoricoChart({ historico }) {
 
   const data = {
     labels: sortedDates.map((date) => {
-      const [year, month, day] = date.split('-')
+      const [, month, day] = date.split('-')
       return `${day}/${month}`
     }),
     datasets: [
@@ -274,9 +267,9 @@ export function HistoricoChart({ historico }) {
 export function TipoRotaChart({ rotas }) {
   if (!rotas || rotas.length === 0) return null
 
-  const valorFixo = rotas.filter((r) => (r.valorFixo ?? 0) > 0 && (r.valorPorPacote ?? 0) <= 0).length
-  const valorPorPacote = rotas.filter((r) => (r.valorPorPacote ?? 0) > 0 && (r.valorFixo ?? 0) <= 0).length
-  const ambos = rotas.filter((r) => (r.valorFixo ?? 0) > 0 && (r.valorPorPacote ?? 0) > 0).length
+  const valorFixo = rotas.filter((r) => (r.fixedAmount ?? 0) > 0 && (r.amountPerPackage ?? 0) <= 0).length
+  const valorPorPacote = rotas.filter((r) => (r.amountPerPackage ?? 0) > 0 && (r.fixedAmount ?? 0) <= 0).length
+  const ambos = rotas.filter((r) => (r.fixedAmount ?? 0) > 0 && (r.amountPerPackage ?? 0) > 0).length
   const total = valorFixo + valorPorPacote + ambos
 
   if (total === 0) return null

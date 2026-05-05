@@ -38,3 +38,6 @@
 **/controle-ganhos.db
 **/controle-ganhos.db-shm
 **/controle-ganhos.db-wal
+
+# Secrets — connection strings com credenciais
+**/appsettings.Development.json
