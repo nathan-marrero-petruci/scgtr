@@ -26,7 +26,6 @@ const request = async (path, options = {}) => {
   })
   if (!response.ok) {
     const text = await response.text()
-    // Try to extract message from ProblemDetails JSON {"title":"...","detail":"..."}
     try {
       const json = JSON.parse(text)
       const msg = json.detail || json.title || json.error || JSON.stringify(json)
@@ -53,11 +52,9 @@ const fmtDate = (dateStr) => {
   return `${d}/${m}/${y}`
 }
 
-const WEEKDAY_NAMES = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb']
 const WEEKDAY_FULL = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado']
 
 const getDateLabel = (dateStr) => {
-  // dateStr is "YYYY-MM-DD"
   const [y, m, d] = dateStr.split('-').map(Number)
   const date = new Date(y, m - 1, d)
   const today = new Date()
@@ -135,9 +132,8 @@ const IconConfig = () => (
 export default function App() {
   const [tab, setTab] = useState('agenda')
   const [theme, setTheme] = useState(() => localStorage.getItem('theme') || 'light')
-  const [transportadoras, setTransportadoras] = useState([])
+  const [carriers, setCarriers] = useState([])
   const [error, setError] = useState('')
-  // bump this to force AgendaTab to re-fetch (e.g. after saving config)
   const [agendaRefreshKey, setAgendaRefreshKey] = useState(0)
 
   useEffect(() => {
@@ -151,27 +147,26 @@ export default function App() {
     localStorage.setItem('theme', theme)
   }, [theme])
 
-  const loadTransportadoras = useCallback(async () => {
+  const loadCarriers = useCallback(async () => {
     try {
-      const data = await request('/transportadoras?includeInactive=true')
-      setTransportadoras(data)
+      const data = await request('/carriers?includeInactive=true')
+      setCarriers(data)
     } catch (err) {
       setError(err.message)
     }
   }, [])
 
-  useEffect(() => { loadTransportadoras() }, [loadTransportadoras])
+  useEffect(() => { loadCarriers() }, [loadCarriers])
 
-  // Refresh transportadoras AND agenda whenever user switches to Agenda tab
   const handleTabChange = useCallback(async (newTab) => {
     setTab(newTab)
     if (newTab === 'agenda') {
-      await loadTransportadoras()
+      await loadCarriers()
       setAgendaRefreshKey(k => k + 1)
     }
-  }, [loadTransportadoras])
+  }, [loadCarriers])
 
-  const transportadorasAtivas = transportadoras.filter(t => t.ativa)
+  const activeCarriers = carriers.filter(c => c.isActive)
 
   const TABS = [
     { id: 'agenda',    label: 'Agenda',    Icon: IconAgenda },
@@ -214,20 +209,20 @@ export default function App() {
         {tab === 'agenda' && (
           <AgendaTab
             key={agendaRefreshKey}
-            transportadoras={transportadoras}
+            carriers={carriers}
             onError={setError}
           />
         )}
         {tab === 'registrar' && (
-          <RegistrarTab transportadorasAtivas={transportadorasAtivas} onError={setError} />
+          <RegistrarTab activeCarriers={activeCarriers} onError={setError} />
         )}
         {tab === 'historico' && (
-          <HistoricoTab transportadorasAtivas={transportadorasAtivas} onError={setError} />
+          <HistoricoTab activeCarriers={activeCarriers} onError={setError} />
         )}
         {tab === 'config' && (
           <ConfigTab
-            transportadoras={transportadoras}
-            onRefresh={async () => { await loadTransportadoras(); setAgendaRefreshKey(k => k + 1) }}
+            carriers={carriers}
+            onRefresh={async () => { await loadCarriers(); setAgendaRefreshKey(k => k + 1) }}
             onError={setError}
           />
         )}
@@ -253,10 +248,9 @@ export default function App() {
 
 // ─── Agenda Tab ─────────────────────────────────────────────────────────────
 
-function AgendaTab({ transportadoras, onError }) {
+function AgendaTab({ carriers, onError }) {
   const [payments, setPayments] = useState([])
   const [loading, setLoading] = useState(true)
-  // 'overdue' = atrasados (scheduledDate < hoje) | 'upcoming' = só futuros | 'paid' = recebidos | 'all' = todos
   const [filter, setFilter] = useState('upcoming')
   const [confirmingId, setConfirmingId] = useState(null)
 
@@ -264,8 +258,8 @@ function AgendaTab({ transportadoras, onError }) {
     setLoading(true)
     try {
       const today = todayStr()
-      const start = addDays(today, -365) // cobre atrasados de até 1 ano atrás
-      const end = addDays(today, 30)     // próximos 30 dias
+      const start = addDays(today, -365)
+      const end = addDays(today, 30)
       const data = await request(`/payments?startDate=${start}&endDate=${end}`)
       setPayments(data)
     } catch (err) {
@@ -278,15 +272,16 @@ function AgendaTab({ transportadoras, onError }) {
   useEffect(() => { fetchPayments() }, [fetchPayments])
 
   const handleConfirm = async (payment) => {
-    const key = `${payment.transportadoraId}-${payment.scheduledDate}-${payment.periodStart}`
+    const key = `${payment.carrierId}-${payment.scheduledDate}-${payment.periodStart}`
     setConfirmingId(key)
     try {
       await request('/payments', {
         method: 'POST',
         body: JSON.stringify({
-          transportadoraId: payment.transportadoraId,
+          carrierId: payment.carrierId,
           periodStart: payment.periodStart,
           periodEnd: payment.periodEnd,
+          scheduledDate: payment.scheduledDate,
           amountReceived: payment.amountDue,
           notes: null,
         }),
@@ -301,10 +296,8 @@ function AgendaTab({ transportadoras, onError }) {
 
   const today = todayStr()
 
-  // Transportadoras ativas sem agendamento: o backend só gera slots de pagamento
-  // para transportadoras com schedule configurado, então basta checar quais não aparecem nos payments
-  const carriersWithPayments = new Set(payments.map(p => p.transportadoraId))
-  const semAgendamento = transportadoras.filter(t => t.ativa && !carriersWithPayments.has(t.id))
+  const carriersWithPayments = new Set(payments.map(p => p.carrierId))
+  const noSchedule = carriers.filter(c => c.isActive && !carriersWithPayments.has(c.id))
 
   const filtered = payments.filter(p => {
     const temValor = Number(p.amountDue ?? 0) > 0 || p.paid
@@ -315,7 +308,6 @@ function AgendaTab({ transportadoras, onError }) {
     return temValor
   })
 
-  // Group by scheduledDate
   const grouped = filtered.reduce((acc, p) => {
     if (!acc[p.scheduledDate]) acc[p.scheduledDate] = []
     acc[p.scheduledDate].push(p)
@@ -345,8 +337,7 @@ function AgendaTab({ transportadoras, onError }) {
         ))}
       </div>
 
-      {/* Aviso de transportadoras sem agendamento */}
-      {!loading && semAgendamento.length > 0 && (
+      {!loading && noSchedule.length > 0 && (
         <div style={{
           background: 'var(--badge-pending-bg)',
           border: '1px solid var(--badge-pending-border)',
@@ -357,7 +348,7 @@ function AgendaTab({ transportadoras, onError }) {
           color: 'var(--badge-pending-text)',
         }}>
           <strong>Sem agendamento:</strong>{' '}
-          {semAgendamento.map(t => t.nome).join(', ')}.{' '}
+          {noSchedule.map(c => c.name).join(', ')}.{' '}
           Configure em <strong>Config → Agenda</strong> para aparecer aqui.
         </div>
       )}
@@ -369,7 +360,7 @@ function AgendaTab({ transportadoras, onError }) {
           <div style={{ fontSize: 40, marginBottom: 12 }}>📋</div>
           <div>Nenhum recebimento encontrado.</div>
           <div style={{ fontSize: 13, marginTop: 8, color: 'var(--text-muted)' }}>
-            {semAgendamento.length > 0
+            {noSchedule.length > 0
               ? 'Configure o agendamento das transportadoras em Config.'
               : 'Nenhum pagamento pendente neste período.'}
           </div>
@@ -392,13 +383,13 @@ function AgendaTab({ transportadoras, onError }) {
             </div>
 
             {items.map((p, idx) => {
-              const key = `${p.transportadoraId}-${p.scheduledDate}-${p.periodStart}`
+              const key = `${p.carrierId}-${p.scheduledDate}-${p.periodStart}`
               const isConfirming = confirmingId === key
               return (
                 <div key={idx} className="payment-item">
                   <div className="payment-item-row">
                     <div>
-                      <div className="payment-item-name">{p.transportadoraNome}</div>
+                      <div className="payment-item-name">{p.carrierName}</div>
                       <div className="payment-item-period">
                         {fmtDate(p.periodStart)} → {fmtDate(p.periodEnd)}
                       </div>
@@ -442,14 +433,14 @@ function AgendaTab({ transportadoras, onError }) {
 
 // ─── Registrar Tab ───────────────────────────────────────────────────────────
 
-function RegistrarTab({ transportadorasAtivas, onError }) {
-  const lastTransportadoraId = localStorage.getItem('lastTransportadoraId') || ''
+function RegistrarTab({ activeCarriers, onError }) {
+  const lastCarrierId = localStorage.getItem('lastCarrierId') || ''
   const [form, setForm] = useState({
-    transportadoraId: lastTransportadoraId,
-    dataRota: todayStr(),
-    valorFixo: '',
-    valorPorPacote: '',
-    quantidadePacotes: '',
+    carrierId: lastCarrierId,
+    routeDate: todayStr(),
+    fixedAmount: '',
+    amountPerPackage: '',
+    packageCount: '',
   })
   const [saving, setSaving] = useState(false)
   const [success, setSuccess] = useState(false)
@@ -461,23 +452,23 @@ function RegistrarTab({ transportadorasAtivas, onError }) {
     setSaving(true)
     setSuccess(false)
     try {
-      await request('/rotas', {
+      await request('/routes', {
         method: 'POST',
         body: JSON.stringify({
-          transportadoraId: Number(form.transportadoraId),
-          dataRota: form.dataRota,
-          valorFixo: form.valorFixo === '' ? null : Number(form.valorFixo),
-          valorPorPacote: form.valorPorPacote === '' ? null : Number(form.valorPorPacote),
-          quantidadePacotes: Number(form.quantidadePacotes || 0),
+          carrierId: Number(form.carrierId),
+          routeDate: form.routeDate,
+          fixedAmount: form.fixedAmount === '' ? null : Number(form.fixedAmount),
+          amountPerPackage: form.amountPerPackage === '' ? null : Number(form.amountPerPackage),
+          packageCount: Number(form.packageCount || 0),
         }),
       })
-      localStorage.setItem('lastTransportadoraId', form.transportadoraId)
+      localStorage.setItem('lastCarrierId', form.carrierId)
       setForm(prev => ({
         ...prev,
-        dataRota: todayStr(),
-        valorFixo: '',
-        valorPorPacote: '',
-        quantidadePacotes: '',
+        routeDate: todayStr(),
+        fixedAmount: '',
+        amountPerPackage: '',
+        packageCount: '',
       }))
       setSuccess(true)
       setTimeout(() => setSuccess(false), 3000)
@@ -488,11 +479,10 @@ function RegistrarTab({ transportadorasAtivas, onError }) {
     }
   }
 
-  // Live total preview
   const previewTotal = (() => {
-    const fixo = Number(form.valorFixo || 0)
-    const porPacote = Number(form.valorPorPacote || 0)
-    const qtd = Number(form.quantidadePacotes || 0)
+    const fixo = Number(form.fixedAmount || 0)
+    const porPacote = Number(form.amountPerPackage || 0)
+    const qtd = Number(form.packageCount || 0)
     const total = fixo + porPacote * qtd
     return total > 0 ? fmt(total) : null
   })()
@@ -507,13 +497,13 @@ function RegistrarTab({ transportadorasAtivas, onError }) {
             <label>
               Transportadora
               <select
-                value={form.transportadoraId}
-                onChange={e => set('transportadoraId', e.target.value)}
+                value={form.carrierId}
+                onChange={e => set('carrierId', e.target.value)}
                 required
               >
                 <option value="">Selecione...</option>
-                {transportadorasAtivas.map(t => (
-                  <option key={t.id} value={t.id}>{t.nome}</option>
+                {activeCarriers.map(c => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
                 ))}
               </select>
             </label>
@@ -524,8 +514,8 @@ function RegistrarTab({ transportadorasAtivas, onError }) {
               Data da rota
               <input
                 type="date"
-                value={form.dataRota}
-                onChange={e => set('dataRota', e.target.value)}
+                value={form.routeDate}
+                onChange={e => set('routeDate', e.target.value)}
                 required
               />
             </label>
@@ -542,8 +532,8 @@ function RegistrarTab({ transportadorasAtivas, onError }) {
                   step="0.01"
                   min="0"
                   placeholder="0,00"
-                  value={form.valorFixo}
-                  onChange={e => set('valorFixo', e.target.value)}
+                  value={form.fixedAmount}
+                  onChange={e => set('fixedAmount', e.target.value)}
                 />
               </label>
             </div>
@@ -555,14 +545,14 @@ function RegistrarTab({ transportadorasAtivas, onError }) {
                   step="0.01"
                   min="0"
                   placeholder="0,00"
-                  value={form.valorPorPacote}
-                  onChange={e => set('valorPorPacote', e.target.value)}
+                  value={form.amountPerPackage}
+                  onChange={e => set('amountPerPackage', e.target.value)}
                 />
               </label>
             </div>
           </div>
 
-          {form.valorPorPacote !== '' && Number(form.valorPorPacote) > 0 && (
+          {form.amountPerPackage !== '' && Number(form.amountPerPackage) > 0 && (
             <div className="form-group">
               <label>
                 Qtde de pacotes
@@ -570,8 +560,8 @@ function RegistrarTab({ transportadorasAtivas, onError }) {
                   type="number"
                   min="1"
                   placeholder="0"
-                  value={form.quantidadePacotes}
-                  onChange={e => set('quantidadePacotes', e.target.value)}
+                  value={form.packageCount}
+                  onChange={e => set('packageCount', e.target.value)}
                   required
                 />
               </label>
@@ -604,56 +594,56 @@ function RegistrarTab({ transportadorasAtivas, onError }) {
 
 // ─── Histórico Tab ───────────────────────────────────────────────────────────
 
-function HistoricoTab({ transportadorasAtivas, onError }) {
-  const [rotas, setRotas] = useState([])
-  const [pnrs, setPnrs] = useState([])
+function HistoricoTab({ activeCarriers, onError }) {
+  const [routes, setRoutes] = useState([])
+  const [discounts, setDiscounts] = useState([])
   const [summary, setSummary] = useState(null)
-  const [historico, setHistorico] = useState([])
+  const [history, setHistory] = useState([])
 
   const [loading, setLoading] = useState(true)
   const [showChart, setShowChart] = useState(false)
   const [startDate, setStartDate] = useState(() => addDays(todayStr(), -30))
   const [endDate, setEndDate] = useState(todayStr)
   const [activePreset, setActivePreset] = useState(30)
-  const [editingRota, setEditingRota] = useState(null) // rota object being edited
-  const [selectedTransportadora, setSelectedTransportadora] = useState('')
+  const [editingRoute, setEditingRoute] = useState(null)
+  const [selectedCarrier, setSelectedCarrier] = useState('')
 
-  const load = useCallback(async (start, end, tId) => {
+  const load = useCallback(async (start, end, cId) => {
     setLoading(true)
     try {
-      const tParam = tId ? `&transportadoraId=${tId}` : ''
-      const [rotasData, summaryData, historicoData, pnrsData] = await Promise.all([
-        request(`/rotas?startDate=${start}&endDate=${end}${tParam}`),
-        request(`/dashboard/summary?startDate=${start}&endDate=${end}${tParam}`),
-        request(`/dashboard/historico?startDate=${start}&endDate=${end}${tParam}`),
-        request(`/pnrs?startDate=${start}&endDate=${end}`),
+      const cParam = cId ? `&carrierId=${cId}` : ''
+      const [routesData, summaryData, historyData, discountsData] = await Promise.all([
+        request(`/routes?startDate=${start}&endDate=${end}${cParam}`),
+        request(`/dashboard/summary?startDate=${start}&endDate=${end}${cParam}`),
+        request(`/dashboard/history?startDate=${start}&endDate=${end}${cParam}`),
+        request(`/discounts?startDate=${start}&endDate=${end}`),
       ])
-      setRotas(rotasData)
+      setRoutes(routesData)
       setSummary(summaryData)
-      setHistorico(historicoData)
-      if (tId) {
-        const tNome = transportadorasAtivas.find(t => String(t.id) === String(tId))?.nome
-        setPnrs(tNome ? pnrsData.filter(p => p.transportadoraNome === tNome) : pnrsData)
+      setHistory(historyData)
+      if (cId) {
+        const cName = activeCarriers.find(c => String(c.id) === String(cId))?.name
+        setDiscounts(cName ? discountsData.filter(d => d.carrierName === cName) : discountsData)
       } else {
-        setPnrs(pnrsData)
+        setDiscounts(discountsData)
       }
     } catch (err) {
       onError(err.message)
     } finally {
       setLoading(false)
     }
-  }, [onError, transportadorasAtivas])
+  }, [onError, activeCarriers])
 
-  const handleDeletePnr = async (id) => {
+  const handleDeleteDiscount = async (id) => {
     try {
-      await request(`/pnrs/${id}`, { method: 'DELETE' })
-      load(startDate, endDate, selectedTransportadora)
+      await request(`/discounts/${id}`, { method: 'DELETE' })
+      load(startDate, endDate, selectedCarrier)
     } catch (err) {
       onError(err.message)
     }
   }
 
-  useEffect(() => { if (startDate && endDate) load(startDate, endDate, selectedTransportadora) }, [startDate, endDate, selectedTransportadora, load])
+  useEffect(() => { if (startDate && endDate) load(startDate, endDate, selectedCarrier) }, [startDate, endDate, selectedCarrier, load])
 
   const applyPreset = (d) => {
     const end = todayStr()
@@ -706,14 +696,14 @@ function HistoricoTab({ transportadorasAtivas, onError }) {
             {!endDate && <span className="date-required">Data obrigatória</span>}
           </div>
         </div>
-        {transportadorasAtivas.length > 0 && (
+        {activeCarriers.length > 0 && (
           <select
-            value={selectedTransportadora}
-            onChange={e => setSelectedTransportadora(e.target.value)}
+            value={selectedCarrier}
+            onChange={e => setSelectedCarrier(e.target.value)}
           >
             <option value="">Todas as transportadoras</option>
-            {transportadorasAtivas.map(t => (
-              <option key={t.id} value={String(t.id)}>{t.nome}</option>
+            {activeCarriers.map(c => (
+              <option key={c.id} value={String(c.id)}>{c.name}</option>
             ))}
           </select>
         )}
@@ -724,64 +714,64 @@ function HistoricoTab({ transportadorasAtivas, onError }) {
       {!loading && summary && (
         <>
           <div className="metrics-grid" style={{ gridTemplateColumns: 'repeat(3, 1fr)', marginBottom: 12 }}>
-            <div className="metric-card"><span>Rotas</span><strong>{summary.totalRotas}</strong></div>
-            <div className="metric-card"><span>Pacotes</span><strong>{summary.totalPacotes}</strong></div>
-            <div className="metric-card"><span>Dias trabalhados</span><strong>{summary.diasTrabalhos}</strong></div>
-            <div className="metric-card"><span>Bruto</span><strong>{fmt(summary.ganhosBrutos)}</strong></div>
-            <div className="metric-card"><span>Descontos</span><strong>{fmt(summary.descontosPnr)}</strong></div>
-            <div className="metric-card"><span>Líquido</span><strong>{fmt(summary.ganhosLiquidos)}</strong></div>
+            <div className="metric-card"><span>Rotas</span><strong>{summary.totalRoutes}</strong></div>
+            <div className="metric-card"><span>Pacotes</span><strong>{summary.totalPackages}</strong></div>
+            <div className="metric-card"><span>Dias trabalhados</span><strong>{summary.workingDays}</strong></div>
+            <div className="metric-card"><span>Bruto</span><strong>{fmt(summary.grossEarnings)}</strong></div>
+            <div className="metric-card"><span>Descontos</span><strong>{fmt(summary.totalDiscounts)}</strong></div>
+            <div className="metric-card"><span>Líquido</span><strong>{fmt(summary.netEarnings)}</strong></div>
           </div>
 
-          {showChart && historico.length > 0 && (
+          {showChart && history.length > 0 && (
             <div className="card">
               <div className="chart-wrapper-tall">
-                <HistoricoChart historico={historico} />
+                <HistoricoChart historico={history} />
               </div>
             </div>
           )}
 
           <div className="card">
             <p className="card-title">Rotas</p>
-            {rotas.length === 0 && (
+            {routes.length === 0 && (
               <div style={{ color: 'var(--text-muted)', fontSize: 14, textAlign: 'center', padding: '12px 0' }}>
                 Nenhuma rota neste período.
               </div>
             )}
-            {rotas.slice(0, 50).map(r => (
+            {routes.slice(0, 50).map(r => (
               <div key={r.id} className="route-item">
                 <div className="route-item-left">
-                  <div className="route-item-name">{r.transportadoraNome}</div>
+                  <div className="route-item-name">{r.carrierName}</div>
                   <div className="route-item-meta">
-                    {fmtDate(r.dataRota)}
-                    {r.quantidadePacotes > 0 ? ` • ${r.quantidadePacotes} pct` : ''}
-                    {r.totalDescontosPnr > 0 ? ` • PNR ${fmt(r.totalDescontosPnr)}` : ''}
+                    {fmtDate(r.routeDate)}
+                    {r.packageCount > 0 ? ` • ${r.packageCount} pct` : ''}
+                    {r.totalDiscounts > 0 ? ` • PNR ${fmt(r.totalDiscounts)}` : ''}
                   </div>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <div className="route-item-amount">{fmt(r.valorLiquido)}</div>
-                  <button className="btn-ghost btn-small" onClick={() => setEditingRota(r)}>Editar</button>
+                  <div className="route-item-amount">{fmt(r.netAmount)}</div>
+                  <button className="btn-ghost btn-small" onClick={() => setEditingRoute(r)}>Editar</button>
                 </div>
               </div>
             ))}
           </div>
 
-          {pnrs.length > 0 && (
+          {discounts.length > 0 && (
             <div className="card">
               <p className="card-title">Descontos PNR</p>
-              {pnrs.map(p => (
-                <div key={p.id} className="route-item">
+              {discounts.map(d => (
+                <div key={d.id} className="route-item">
                   <div className="route-item-left">
-                    <div className="route-item-name">{p.transportadoraNome}</div>
+                    <div className="route-item-name">{d.carrierName}</div>
                     <div className="route-item-meta">
-                      Rota: {fmtDate(p.dataRota)} • PNR: {fmtDate(p.dataPnr)}
-                      {p.observacao ? ` • ${p.observacao}` : ''}
+                      Rota: {fmtDate(d.routeDate)} • PNR: {fmtDate(d.discountDate)}
+                      {d.notes ? ` • ${d.notes}` : ''}
                     </div>
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                     <div className="route-item-amount" style={{ color: 'var(--color-danger, #ef4444)' }}>
-                      -{fmt(p.valorDesconto)}
+                      -{fmt(d.discountAmount)}
                     </div>
-                    <button className="btn-ghost btn-small" onClick={() => handleDeletePnr(p.id)} title="Remover PNR">✕</button>
+                    <button className="btn-ghost btn-small" onClick={() => handleDeleteDiscount(d.id)} title="Remover PNR">✕</button>
                   </div>
                 </div>
               ))}
@@ -790,13 +780,12 @@ function HistoricoTab({ transportadorasAtivas, onError }) {
         </>
       )}
 
-      {/* Modal de edição de rota */}
-      {editingRota && (
-        <EditRotaModal
-          rota={editingRota}
-          transportadorasAtivas={transportadorasAtivas}
-          onClose={() => setEditingRota(null)}
-          onSaved={() => { setEditingRota(null); load(startDate, endDate, selectedTransportadora) }}
+      {editingRoute && (
+        <EditRouteModal
+          route={editingRoute}
+          activeCarriers={activeCarriers}
+          onClose={() => setEditingRoute(null)}
+          onSaved={() => { setEditingRoute(null); load(startDate, endDate, selectedCarrier) }}
           onError={onError}
         />
       )}
@@ -804,21 +793,21 @@ function HistoricoTab({ transportadorasAtivas, onError }) {
   )
 }
 
-function EditRotaModal({ rota, transportadorasAtivas, onClose, onSaved, onError }) {
+function EditRouteModal({ route, activeCarriers, onClose, onSaved, onError }) {
   const [form, setForm] = useState({
-    transportadoraId: String(rota.transportadoraId),
-    dataRota: rota.dataRota,
-    valorFixo: rota.valorFixo != null ? String(rota.valorFixo) : '',
-    valorPorPacote: rota.valorPorPacote != null ? String(rota.valorPorPacote) : '',
-    quantidadePacotes: rota.quantidadePacotes > 0 ? String(rota.quantidadePacotes) : '',
+    carrierId: String(route.carrierId),
+    routeDate: route.routeDate,
+    fixedAmount: route.fixedAmount != null ? String(route.fixedAmount) : '',
+    amountPerPackage: route.amountPerPackage != null ? String(route.amountPerPackage) : '',
+    packageCount: route.packageCount > 0 ? String(route.packageCount) : '',
   })
   const [saving, setSaving] = useState(false)
   const set = (k, v) => setForm(p => ({ ...p, [k]: v }))
 
   const previewTotal = (() => {
-    const fixo = Number(form.valorFixo || 0)
-    const porPacote = Number(form.valorPorPacote || 0)
-    const qtd = Number(form.quantidadePacotes || 0)
+    const fixo = Number(form.fixedAmount || 0)
+    const porPacote = Number(form.amountPerPackage || 0)
+    const qtd = Number(form.packageCount || 0)
     const total = fixo + porPacote * qtd
     return total > 0 ? fmt(total) : null
   })()
@@ -827,14 +816,14 @@ function EditRotaModal({ rota, transportadorasAtivas, onClose, onSaved, onError 
     e.preventDefault()
     setSaving(true)
     try {
-      await request(`/rotas/${rota.id}`, {
+      await request(`/routes/${route.id}`, {
         method: 'PUT',
         body: JSON.stringify({
-          transportadoraId: Number(form.transportadoraId),
-          dataRota: form.dataRota,
-          valorFixo: form.valorFixo === '' ? null : Number(form.valorFixo),
-          valorPorPacote: form.valorPorPacote === '' ? null : Number(form.valorPorPacote),
-          quantidadePacotes: Number(form.quantidadePacotes || 0),
+          carrierId: Number(form.carrierId),
+          routeDate: form.routeDate,
+          fixedAmount: form.fixedAmount === '' ? null : Number(form.fixedAmount),
+          amountPerPackage: form.amountPerPackage === '' ? null : Number(form.amountPerPackage),
+          packageCount: Number(form.packageCount || 0),
         }),
       })
       onSaved()
@@ -849,44 +838,44 @@ function EditRotaModal({ rota, transportadorasAtivas, onClose, onSaved, onError 
     <div className="modal-overlay">
       <div className="modal-sheet">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-          <h2 style={{ margin: 0, fontSize: 18 }}>Editar Rota #{rota.id}</h2>
+          <h2 style={{ margin: 0, fontSize: 18 }}>Editar Rota #{route.id}</h2>
           <button className="btn-ghost btn-small" onClick={onClose}>✕</button>
         </div>
         <form onSubmit={handleSubmit}>
           <div className="form-group">
             <label>
               Transportadora
-              <select value={form.transportadoraId} onChange={e => set('transportadoraId', e.target.value)} required>
+              <select value={form.carrierId} onChange={e => set('carrierId', e.target.value)} required>
                 <option value="">Selecione...</option>
-                {transportadorasAtivas.map(t => <option key={t.id} value={t.id}>{t.nome}</option>)}
+                {activeCarriers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
               </select>
             </label>
           </div>
           <div className="form-group">
             <label>
               Data da rota
-              <input type="date" value={form.dataRota} onChange={e => set('dataRota', e.target.value)} required />
+              <input type="date" value={form.routeDate} onChange={e => set('routeDate', e.target.value)} required />
             </label>
           </div>
           <div className="form-row">
             <div className="form-group">
               <label>
                 Valor fixo (R$)
-                <input type="number" step="0.01" min="0" placeholder="0,00" value={form.valorFixo} onChange={e => set('valorFixo', e.target.value)} />
+                <input type="number" step="0.01" min="0" placeholder="0,00" value={form.fixedAmount} onChange={e => set('fixedAmount', e.target.value)} />
               </label>
             </div>
             <div className="form-group">
               <label>
                 Valor/pacote (R$)
-                <input type="number" step="0.01" min="0" placeholder="0,00" value={form.valorPorPacote} onChange={e => set('valorPorPacote', e.target.value)} />
+                <input type="number" step="0.01" min="0" placeholder="0,00" value={form.amountPerPackage} onChange={e => set('amountPerPackage', e.target.value)} />
               </label>
             </div>
           </div>
-          {form.valorPorPacote !== '' && Number(form.valorPorPacote) > 0 && (
+          {form.amountPerPackage !== '' && Number(form.amountPerPackage) > 0 && (
             <div className="form-group">
               <label>
                 Qtde de pacotes
-                <input type="number" min="1" value={form.quantidadePacotes} onChange={e => set('quantidadePacotes', e.target.value)} required />
+                <input type="number" min="1" value={form.packageCount} onChange={e => set('packageCount', e.target.value)} required />
               </label>
             </div>
           )}
@@ -907,28 +896,27 @@ function EditRotaModal({ rota, transportadorasAtivas, onClose, onSaved, onError 
 
 // ─── Config Tab ──────────────────────────────────────────────────────────────
 
-function ConfigTab({ transportadoras, onRefresh, onError }) {
+function ConfigTab({ carriers, onRefresh, onError }) {
   const [showAddCarrier, setShowAddCarrier] = useState(false)
   const [showPnr, setShowPnr] = useState(false)
-  const [showScheduleModal, setShowScheduleModal] = useState(null) // transportadora object
-  const [carrierForm, setCarrierForm] = useState({ nome: '' })
-  const [pnrForm, setPnrForm] = useState({ rotaId: '', dataPnr: todayStr(), valorDesconto: '', observacao: '' })
+  const [showScheduleModal, setShowScheduleModal] = useState(null)
+  const [carrierForm, setCarrierForm] = useState({ name: '' })
+  const [discountForm, setDiscountForm] = useState({ routeId: '', discountDate: todayStr(), discountAmount: '', notes: '' })
   const [scheduleForm, setScheduleForm] = useState({ frequency: '', weekday: '', dayOfMonth: '', weekStartDay: '' })
-  const [rotas, setRotas] = useState([])
+  const [routes, setRoutes] = useState([])
   const [saving, setSaving] = useState(false)
   const [deletingCarrierId, setDeletingCarrierId] = useState(null)
   const [carrierError, setCarrierError] = useState('')
 
   useEffect(() => {
-    if (showPnr && rotas.length === 0) {
-      request('/rotas').then(setRotas).catch(e => onError(e.message))
+    if (showPnr && routes.length === 0) {
+      request('/routes').then(setRoutes).catch(e => onError(e.message))
     }
-  }, [showPnr, rotas.length, onError])
+  }, [showPnr, routes.length, onError])
 
-  const openSchedule = async (t) => {
-    // Load existing schedule
+  const openSchedule = async (c) => {
     try {
-      const s = await request(`/transportadoras/${t.id}/payment-schedule`)
+      const s = await request(`/carriers/${c.id}/payment-schedule`)
       setScheduleForm({
         frequency: s.frequency || '',
         weekday: s.weekday != null ? String(s.weekday) : '',
@@ -938,7 +926,7 @@ function ConfigTab({ transportadoras, onRefresh, onError }) {
     } catch {
       setScheduleForm({ frequency: '', weekday: '', dayOfMonth: '', weekStartDay: '' })
     }
-    setShowScheduleModal(t)
+    setShowScheduleModal(c)
   }
 
   const handleCreateCarrier = async (e) => {
@@ -946,11 +934,11 @@ function ConfigTab({ transportadoras, onRefresh, onError }) {
     setSaving(true)
     setCarrierError('')
     try {
-      await request('/transportadoras', {
+      await request('/carriers', {
         method: 'POST',
-        body: JSON.stringify({ nome: carrierForm.nome }),
+        body: JSON.stringify({ name: carrierForm.name }),
       })
-      setCarrierForm({ nome: '' })
+      setCarrierForm({ name: '' })
       setShowAddCarrier(false)
       await onRefresh()
     } catch (err) {
@@ -973,7 +961,7 @@ function ConfigTab({ transportadoras, onRefresh, onError }) {
         weekStartDay: scheduleForm.frequency === 'weekly' && scheduleForm.weekStartDay !== ''
           ? Number(scheduleForm.weekStartDay) : null,
       }
-      await request(`/transportadoras/${showScheduleModal.id}/payment-schedule`, {
+      await request(`/carriers/${showScheduleModal.id}/payment-schedule`, {
         method: 'PUT',
         body: JSON.stringify(body),
       })
@@ -986,20 +974,20 @@ function ConfigTab({ transportadoras, onRefresh, onError }) {
     }
   }
 
-  const handleCreatePnr = async (e) => {
+  const handleCreateDiscount = async (e) => {
     e.preventDefault()
     setSaving(true)
     try {
-      await request('/pnrs', {
+      await request('/discounts', {
         method: 'POST',
         body: JSON.stringify({
-          rotaId: Number(pnrForm.rotaId),
-          dataPnr: pnrForm.dataPnr,
-          valorDesconto: Number(pnrForm.valorDesconto),
-          observacao: pnrForm.observacao || null,
+          routeId: Number(discountForm.routeId),
+          discountDate: discountForm.discountDate,
+          discountAmount: Number(discountForm.discountAmount),
+          notes: discountForm.notes || null,
         }),
       })
-      setPnrForm({ rotaId: '', dataPnr: todayStr(), valorDesconto: '', observacao: '' })
+      setDiscountForm({ routeId: '', discountDate: todayStr(), discountAmount: '', notes: '' })
       setShowPnr(false)
     } catch (err) {
       onError(err.message)
@@ -1008,19 +996,19 @@ function ConfigTab({ transportadoras, onRefresh, onError }) {
     }
   }
 
-  const handleToggleCarrier = async (t) => {
+  const handleToggleCarrier = async (c) => {
     try {
-      const action = t.ativa ? 'inativar' : 'reativar'
-      await request(`/transportadoras/${t.id}/${action}`, { method: 'PATCH' })
+      const action = c.isActive ? 'deactivate' : 'reactivate'
+      await request(`/carriers/${c.id}/${action}`, { method: 'PATCH' })
       await onRefresh()
     } catch (err) {
       onError(err.message)
     }
   }
 
-  const handleDeleteCarrier = async (t) => {
+  const handleDeleteCarrier = async (c) => {
     try {
-      await request(`/transportadoras/${t.id}`, { method: 'DELETE' })
+      await request(`/carriers/${c.id}`, { method: 'DELETE' })
       setDeletingCarrierId(null)
       await onRefresh()
     } catch (err) {
@@ -1031,38 +1019,37 @@ function ConfigTab({ transportadoras, onRefresh, onError }) {
 
   return (
     <div>
-      {/* Transportadoras */}
       <p className="section-title">Transportadoras</p>
       <div className="card">
-        {transportadoras.map(t => (
-          <div key={t.id} className="carrier-item">
+        {carriers.map(c => (
+          <div key={c.id} className="carrier-item">
             <div style={{ flex: 1, minWidth: 0 }}>
-              <div className="carrier-name">{t.nome}</div>
+              <div className="carrier-name">{c.name}</div>
               <div className="carrier-meta">
-                {t.ativa ? 'Ativa' : 'Inativa'}
-                {t.paymentSchedule && ` • ${scheduleLabel(t.paymentSchedule)}`}
+                {c.isActive ? 'Ativa' : 'Inativa'}
+                {c.paymentSchedule && ` • ${scheduleLabel(c.paymentSchedule)}`}
               </div>
             </div>
-            {deletingCarrierId === t.id ? (
+            {deletingCarrierId === c.id ? (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-end' }}>
-                <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>Excluir "{t.nome}"?</span>
+                <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>Excluir "{c.name}"?</span>
                 <div style={{ display: 'flex', gap: 6 }}>
-                  <button className="btn-danger btn-small" onClick={() => handleDeleteCarrier(t)}>Confirmar</button>
+                  <button className="btn-danger btn-small" onClick={() => handleDeleteCarrier(c)}>Confirmar</button>
                   <button className="btn-ghost btn-small" onClick={() => setDeletingCarrierId(null)}>Cancelar</button>
                 </div>
               </div>
             ) : (
               <div className="carrier-actions">
-                <button className="btn-ghost btn-small" onClick={() => openSchedule(t)}>
+                <button className="btn-ghost btn-small" onClick={() => openSchedule(c)}>
                   Agenda
                 </button>
                 <button
-                  className={`btn-small ${t.ativa ? 'btn-danger' : 'btn-success'}`}
-                  onClick={() => handleToggleCarrier(t)}
+                  className={`btn-small ${c.isActive ? 'btn-danger' : 'btn-success'}`}
+                  onClick={() => handleToggleCarrier(c)}
                 >
-                  {t.ativa ? 'Inativar' : 'Reativar'}
+                  {c.isActive ? 'Inativar' : 'Reativar'}
                 </button>
-                <button className="btn-ghost btn-small" onClick={() => setDeletingCarrierId(t.id)} title="Excluir">
+                <button className="btn-ghost btn-small" onClick={() => setDeletingCarrierId(c.id)} title="Excluir">
                   🗑
                 </button>
               </div>
@@ -1078,8 +1065,8 @@ function ConfigTab({ transportadoras, onRefresh, onError }) {
           <form onSubmit={handleCreateCarrier} style={{ marginTop: 12 }}>
             <div style={{ display: 'flex', gap: 8 }}>
               <input
-                value={carrierForm.nome}
-                onChange={e => { setCarrierForm({ nome: e.target.value }); setCarrierError('') }}
+                value={carrierForm.name}
+                onChange={e => { setCarrierForm({ name: e.target.value }); setCarrierError('') }}
                 placeholder="Nome da transportadora"
                 required
                 autoFocus
@@ -1101,7 +1088,6 @@ function ConfigTab({ transportadoras, onRefresh, onError }) {
         )}
       </div>
 
-      {/* Registro de PNR */}
       <p className="section-title">Desconto / PNR</p>
       <div className="card">
         {!showPnr ? (
@@ -1109,19 +1095,19 @@ function ConfigTab({ transportadoras, onRefresh, onError }) {
             Registrar desconto (PNR)
           </button>
         ) : (
-          <form onSubmit={handleCreatePnr}>
+          <form onSubmit={handleCreateDiscount}>
             <div className="form-group">
               <label>
                 Rota
                 <select
-                  value={pnrForm.rotaId}
-                  onChange={e => setPnrForm(p => ({ ...p, rotaId: e.target.value }))}
+                  value={discountForm.routeId}
+                  onChange={e => setDiscountForm(p => ({ ...p, routeId: e.target.value }))}
                   required
                 >
                   <option value="">Selecione a rota...</option>
-                  {rotas.map(r => (
+                  {routes.map(r => (
                     <option key={r.id} value={r.id}>
-                      #{r.id} — {r.transportadoraNome} ({fmtDate(r.dataRota)}) {fmt(r.valorTotalCalculado)}
+                      #{r.id} — {r.carrierName} ({fmtDate(r.routeDate)}) {fmt(r.totalAmount)}
                     </option>
                   ))}
                 </select>
@@ -1133,8 +1119,8 @@ function ConfigTab({ transportadoras, onRefresh, onError }) {
                   Data do PNR
                   <input
                     type="date"
-                    value={pnrForm.dataPnr}
-                    onChange={e => setPnrForm(p => ({ ...p, dataPnr: e.target.value }))}
+                    value={discountForm.discountDate}
+                    onChange={e => setDiscountForm(p => ({ ...p, discountDate: e.target.value }))}
                     required
                   />
                 </label>
@@ -1147,8 +1133,8 @@ function ConfigTab({ transportadoras, onRefresh, onError }) {
                     step="0.01"
                     min="0.01"
                     placeholder="0,00"
-                    value={pnrForm.valorDesconto}
-                    onChange={e => setPnrForm(p => ({ ...p, valorDesconto: e.target.value }))}
+                    value={discountForm.discountAmount}
+                    onChange={e => setDiscountForm(p => ({ ...p, discountAmount: e.target.value }))}
                     required
                   />
                 </label>
@@ -1158,8 +1144,8 @@ function ConfigTab({ transportadoras, onRefresh, onError }) {
               <label>
                 Observação (opcional)
                 <input
-                  value={pnrForm.observacao}
-                  onChange={e => setPnrForm(p => ({ ...p, observacao: e.target.value }))}
+                  value={discountForm.notes}
+                  onChange={e => setDiscountForm(p => ({ ...p, notes: e.target.value }))}
                   placeholder="Ex: pacote danificado"
                 />
               </label>
@@ -1172,12 +1158,11 @@ function ConfigTab({ transportadoras, onRefresh, onError }) {
         )}
       </div>
 
-      {/* Schedule Modal */}
       {showScheduleModal && (
         <div className="modal-overlay">
           <div className="modal-sheet">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-              <h2 style={{ margin: 0, fontSize: 18 }}>Agendamento — {showScheduleModal.nome}</h2>
+              <h2 style={{ margin: 0, fontSize: 18 }}>Agendamento — {showScheduleModal.name}</h2>
               <button className="btn-ghost btn-small" onClick={() => setShowScheduleModal(null)}>✕</button>
             </div>
 
