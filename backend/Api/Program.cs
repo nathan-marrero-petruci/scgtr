@@ -5,9 +5,9 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddOpenApi();
 
-// Configurar caminho do banco (Fly.io usa /data para volume persistente)
-var dbPath = builder.Configuration["DB_PATH"] ?? "controle-ganhos.db";
-builder.Services.AddDbContext<AppDbContext>(options => options.UseSqlite($"Data Source={dbPath}"));
+var connectionString = builder.Configuration.GetConnectionString("DefaultConnection")
+    ?? throw new InvalidOperationException("Connection string 'DefaultConnection' not found.");
+builder.Services.AddDbContext<AppDbContext>(options => options.UseNpgsql(connectionString));
 builder.Services.ConfigureHttpJsonOptions(options =>
 {
     options.SerializerOptions.ReferenceHandler = ReferenceHandler.IgnoreCycles;
@@ -19,26 +19,13 @@ builder.Services.AddCors(options =>
         policy.SetIsOriginAllowed(origin =>
             {
                 if (string.IsNullOrWhiteSpace(origin))
-                {
                     return false;
-                }
-
                 if (!Uri.TryCreate(origin, UriKind.Absolute, out var uri))
-                {
                     return false;
-                }
-
                 if (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps)
-                {
                     return false;
-                }
-
                 if (uri.Host.Equals("localhost", StringComparison.OrdinalIgnoreCase))
-                {
                     return true;
-                }
-
-                // Allow local network (192.168.x.x, 10.x.x.x, 172.16-31.x.x)
                 if (System.Net.IPAddress.TryParse(uri.Host, out var ip))
                 {
                     var bytes = ip.GetAddressBytes();
@@ -46,7 +33,6 @@ builder.Services.AddCors(options =>
                     if (bytes[0] == 10) return true;
                     if (bytes[0] == 172 && bytes[1] >= 16 && bytes[1] <= 31) return true;
                 }
-
                 return uri.Host.EndsWith(".vercel.app", StringComparison.OrdinalIgnoreCase)
                     || uri.Host.EndsWith(".pages.dev", StringComparison.OrdinalIgnoreCase)
                     || uri.Host.EndsWith(".up.railway.app", StringComparison.OrdinalIgnoreCase);
@@ -61,199 +47,166 @@ var app = builder.Build();
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-    db.Database.EnsureCreated();
-    // Add WeekStartDay column if it doesn't exist yet (safe to run on every startup)
-    try { db.Database.ExecuteSqlRaw("ALTER TABLE PaymentSchedules ADD COLUMN WeekStartDay INTEGER NULL"); } catch { /* already exists */ }
+    db.Database.Migrate();
 }
 
 if (app.Environment.IsDevelopment())
-{
     app.MapOpenApi();
-}
 
 app.UseCors("frontend");
 
-app.MapGet("/api/transportadoras", async (AppDbContext db, bool includeInactive = false) =>
-{
-    var query = db.Transportadoras.AsQueryable();
-    if (!includeInactive)
-    {
-        query = query.Where(x => x.Ativa);
-    }
+// ── Carriers ──────────────────────────────────────────────────────────────────
 
-    var transportadoras = await query
+app.MapGet("/api/carriers", async (AppDbContext db, bool includeInactive = false) =>
+{
+    var query = db.Carriers.AsQueryable();
+    if (!includeInactive)
+        query = query.Where(x => x.IsActive);
+
+    var carriers = await query
         .Include(x => x.PaymentSchedule)
-        .OrderBy(x => x.Nome)
+        .OrderBy(x => x.Name)
         .ToListAsync();
 
-    var result = transportadoras.Select(t => new TransportadoraListResponse(
-        t.Id,
-        t.Nome,
-        t.Ativa,
-        t.PaymentSchedule != null
-            ? new PaymentScheduleResponse(t.PaymentSchedule.Frequency, t.PaymentSchedule.Weekday, t.PaymentSchedule.DayOfMonth, t.PaymentSchedule.WeekStartDay)
+    var result = carriers.Select(c => new CarrierResponse(
+        c.Id,
+        c.Name,
+        c.IsActive,
+        c.PaymentSchedule != null
+            ? new PaymentScheduleResponse(c.PaymentSchedule.Frequency, c.PaymentSchedule.Weekday, c.PaymentSchedule.DayOfMonth, c.PaymentSchedule.WeekStartDay)
             : null,
-        t.CreatedAt
+        c.CreatedAt
     )).ToList();
 
     return Results.Ok(result);
 });
 
-app.MapPost("/api/transportadoras", async (AppDbContext db, TransportadoraCreateRequest request) =>
+app.MapPost("/api/carriers", async (AppDbContext db, CarrierCreateRequest request) =>
 {
-    if (string.IsNullOrWhiteSpace(request.Nome))
-    {
-        return Results.BadRequest("Nome é obrigatório.");
-    }
+    if (string.IsNullOrWhiteSpace(request.Name))
+        return Results.BadRequest("Name is required.");
 
-    var nomeTrimmed = request.Nome.Trim();
-    var duplicada = await db.Transportadoras
-        .AnyAsync(t => t.Nome.ToLower() == nomeTrimmed.ToLower());
-    if (duplicada)
-    {
-        return Results.Conflict("Já existe uma transportadora com esse nome.");
-    }
+    var nameTrimmed = request.Name.Trim();
+    var duplicate = await db.Carriers.AnyAsync(c => c.Name.ToLower() == nameTrimmed.ToLower());
+    if (duplicate)
+        return Results.Conflict("A carrier with this name already exists.");
 
-    var transportadora = new Transportadora
+    var carrier = new Carrier
     {
-        Nome = nomeTrimmed,
-        Ativa = true,
+        Name = nameTrimmed,
+        IsActive = true,
         CreatedAt = DateTime.UtcNow
     };
 
-    db.Transportadoras.Add(transportadora);
+    db.Carriers.Add(carrier);
     await db.SaveChangesAsync();
 
-    return Results.Created($"/api/transportadoras/{transportadora.Id}", transportadora);
+    return Results.Created($"/api/carriers/{carrier.Id}", carrier);
 });
 
-app.MapPut("/api/transportadoras/{id:int}", async (AppDbContext db, int id, TransportadoraUpdateRequest request) =>
+app.MapPut("/api/carriers/{id:int}", async (AppDbContext db, int id, CarrierUpdateRequest request) =>
 {
-    var transportadora = await db.Transportadoras.FindAsync(id);
-    if (transportadora is null)
-    {
+    var carrier = await db.Carriers.FindAsync(id);
+    if (carrier is null)
         return Results.NotFound();
-    }
 
-    if (string.IsNullOrWhiteSpace(request.Nome))
-    {
-        return Results.BadRequest("Nome é obrigatório.");
-    }
+    if (string.IsNullOrWhiteSpace(request.Name))
+        return Results.BadRequest("Name is required.");
 
-    var nomeTrimmedPut = request.Nome.Trim();
-    var duplicadaPut = await db.Transportadoras
-        .AnyAsync(t => t.Id != id && t.Nome.ToLower() == nomeTrimmedPut.ToLower());
-    if (duplicadaPut)
-    {
-        return Results.Conflict("Já existe uma transportadora com esse nome.");
-    }
+    var nameTrimmed = request.Name.Trim();
+    var duplicate = await db.Carriers.AnyAsync(c => c.Id != id && c.Name.ToLower() == nameTrimmed.ToLower());
+    if (duplicate)
+        return Results.Conflict("A carrier with this name already exists.");
 
-    transportadora.Nome = nomeTrimmedPut;
-    transportadora.Ativa = request.Ativa;
+    carrier.Name = nameTrimmed;
+    carrier.IsActive = request.IsActive;
     await db.SaveChangesAsync();
 
-    return Results.Ok(transportadora);
+    return Results.Ok(carrier);
 });
 
-app.MapDelete("/api/transportadoras/{id:int}", async (AppDbContext db, int id) =>
+app.MapDelete("/api/carriers/{id:int}", async (AppDbContext db, int id) =>
 {
-    var transportadora = await db.Transportadoras
-        .Include(t => t.Rotas)
-        .FirstOrDefaultAsync(t => t.Id == id);
+    var carrier = await db.Carriers
+        .Include(c => c.Routes)
+        .FirstOrDefaultAsync(c => c.Id == id);
 
-    if (transportadora is null) return Results.Problem("Transportadora não encontrada.", statusCode: 404);
+    if (carrier is null) return Results.Problem("Carrier not found.", statusCode: 404);
 
-    if (transportadora.Rotas.Count > 0)
-        return Results.Problem("Não é possível excluir uma transportadora com rotas cadastradas. Inative-a primeiro.", statusCode: 400);
+    if (carrier.Routes.Count > 0)
+        return Results.Problem("Cannot delete a carrier with registered routes. Deactivate it first.", statusCode: 400);
 
-    // Remove schedule and payments if exist
-    var schedule = await db.PaymentSchedules.FirstOrDefaultAsync(x => x.TransportadoraId == id);
+    var schedule = await db.PaymentSchedules.FirstOrDefaultAsync(x => x.CarrierId == id);
     if (schedule is not null) db.PaymentSchedules.Remove(schedule);
 
-    var payments = await db.Payments.Where(x => x.TransportadoraId == id).ToListAsync();
+    var payments = await db.Payments.Where(x => x.CarrierId == id).ToListAsync();
     db.Payments.RemoveRange(payments);
 
-    db.Transportadoras.Remove(transportadora);
+    db.Carriers.Remove(carrier);
     await db.SaveChangesAsync();
     return Results.NoContent();
 });
 
-app.MapPatch("/api/transportadoras/{id:int}/inativar", async (AppDbContext db, int id) =>
+app.MapPatch("/api/carriers/{id:int}/deactivate", async (AppDbContext db, int id) =>
 {
-    var transportadora = await db.Transportadoras.FindAsync(id);
-    if (transportadora is null)
-    {
+    var carrier = await db.Carriers.FindAsync(id);
+    if (carrier is null)
         return Results.NotFound();
-    }
 
-    transportadora.Ativa = false;
+    carrier.IsActive = false;
     await db.SaveChangesAsync();
-
-    return Results.Ok(transportadora);
+    return Results.Ok(carrier);
 });
 
-app.MapPatch("/api/transportadoras/{id:int}/reativar", async (AppDbContext db, int id) =>
+app.MapPatch("/api/carriers/{id:int}/reactivate", async (AppDbContext db, int id) =>
 {
-    var transportadora = await db.Transportadoras.FindAsync(id);
-    if (transportadora is null)
-    {
+    var carrier = await db.Carriers.FindAsync(id);
+    if (carrier is null)
         return Results.NotFound();
-    }
 
-    transportadora.Ativa = true;
+    carrier.IsActive = true;
     await db.SaveChangesAsync();
-
-    return Results.Ok(transportadora);
+    return Results.Ok(carrier);
 });
 
-// Payment schedule endpoints
-app.MapGet("/api/transportadoras/{id:int}/payment-schedule", async (AppDbContext db, int id) =>
+// ── Payment Schedules ─────────────────────────────────────────────────────────
+
+app.MapGet("/api/carriers/{id:int}/payment-schedule", async (AppDbContext db, int id) =>
 {
-    var schedule = await db.PaymentSchedules.FirstOrDefaultAsync(x => x.TransportadoraId == id);
+    var schedule = await db.PaymentSchedules.FirstOrDefaultAsync(x => x.CarrierId == id);
     if (schedule is null)
-    {
         return Results.NotFound();
-    }
 
     return Results.Ok(new PaymentScheduleResponse(schedule.Frequency, schedule.Weekday, schedule.DayOfMonth, schedule.WeekStartDay));
 });
 
-app.MapPut("/api/transportadoras/{id:int}/payment-schedule", async (AppDbContext db, int id, PaymentScheduleRequest request) =>
+app.MapPut("/api/carriers/{id:int}/payment-schedule", async (AppDbContext db, int id, PaymentScheduleRequest request) =>
 {
-    var transportadora = await db.Transportadoras.FindAsync(id);
-    if (transportadora is null)
-    {
+    var carrier = await db.Carriers.FindAsync(id);
+    if (carrier is null)
         return Results.NotFound();
-    }
 
     if (request.Frequency is null || (request.Frequency != "weekly" && request.Frequency != "quinzena"))
-    {
-        return Results.BadRequest("Frequency inválida. Use 'weekly' ou 'quinzena'.");
-    }
+        return Results.BadRequest("Invalid frequency. Use 'weekly' or 'quinzena'.");
 
     if (request.Frequency == "weekly" && (!request.Weekday.HasValue || request.Weekday < 0 || request.Weekday > 6))
-    {
-        return Results.BadRequest("Weekday é obrigatório para frequência 'weekly' e deve estar entre 0 (domingo) e 6 (sábado).");
-    }
+        return Results.BadRequest("Weekday is required for 'weekly' and must be between 0 (Sunday) and 6 (Saturday).");
 
     if (request.Frequency == "quinzena" && (!request.DayOfMonth.HasValue || request.DayOfMonth < 1 || request.DayOfMonth > 31))
-    {
-        return Results.BadRequest("DayOfMonth é obrigatório para frequência 'quinzena' e deve estar entre 1 e 31.");
-    }
+        return Results.BadRequest("DayOfMonth is required for 'quinzena' and must be between 1 and 31.");
 
-    var schedule = await db.PaymentSchedules.FirstOrDefaultAsync(x => x.TransportadoraId == id);
+    var schedule = await db.PaymentSchedules.FirstOrDefaultAsync(x => x.CarrierId == id);
     if (schedule is null)
     {
         schedule = new PaymentSchedule
         {
-            TransportadoraId = id,
+            CarrierId = id,
             Frequency = request.Frequency,
             Weekday = request.Weekday,
             DayOfMonth = request.DayOfMonth,
             WeekStartDay = request.WeekStartDay,
             CreatedAt = DateTime.UtcNow
         };
-
         db.PaymentSchedules.Add(schedule);
     }
     else
@@ -268,221 +221,192 @@ app.MapPut("/api/transportadoras/{id:int}/payment-schedule", async (AppDbContext
     return Results.Ok(new PaymentScheduleResponse(schedule.Frequency, schedule.Weekday, schedule.DayOfMonth, schedule.WeekStartDay));
 });
 
-app.MapGet("/api/rotas", async (AppDbContext db, DateOnly? startDate = null, DateOnly? endDate = null, int? transportadoraId = null) =>
+// ── Routes ────────────────────────────────────────────────────────────────────
+
+app.MapGet("/api/routes", async (AppDbContext db, DateOnly? startDate = null, DateOnly? endDate = null, int? carrierId = null) =>
 {
-    var query = db.Rotas
-        .Include(x => x.Transportadora)
-        .Include(x => x.Pnrs)
+    var query = db.Routes
+        .Include(x => x.Carrier)
+        .Include(x => x.Discounts)
         .AsQueryable();
 
     if (startDate.HasValue)
-    {
-        query = query.Where(x => x.DataRota >= startDate.Value);
-    }
-
+        query = query.Where(x => x.RouteDate >= startDate.Value);
     if (endDate.HasValue)
-    {
-        query = query.Where(x => x.DataRota <= endDate.Value);
-    }
+        query = query.Where(x => x.RouteDate <= endDate.Value);
+    if (carrierId.HasValue)
+        query = query.Where(x => x.CarrierId == carrierId.Value);
 
-    if (transportadoraId.HasValue)
-    {
-        query = query.Where(x => x.TransportadoraId == transportadoraId.Value);
-    }
-
-    var rotas = await query
-        .OrderByDescending(x => x.DataRota)
+    var routes = await query
+        .OrderByDescending(x => x.RouteDate)
         .ThenByDescending(x => x.CreatedAt)
-        .Select(x => new RotaResponse(
+        .Select(x => new RouteResponse(
             x.Id,
-            x.TransportadoraId,
-            x.Transportadora.Nome,
-            x.DataRota,
-            x.ValorFixo,
-            x.ValorPorPacote,
-            x.QuantidadePacotes,
-            x.ValorTotalCalculado,
-            x.Pnrs.Sum(p => p.ValorDesconto),
-            x.ValorTotalCalculado - x.Pnrs.Sum(p => p.ValorDesconto),
+            x.CarrierId,
+            x.Carrier.Name,
+            x.RouteDate,
+            x.FixedAmount,
+            x.AmountPerPackage,
+            x.PackageCount,
+            x.TotalAmount,
+            x.Discounts.Sum(d => d.DiscountAmount),
+            x.TotalAmount - x.Discounts.Sum(d => d.DiscountAmount),
+            x.Notes,
             x.CreatedAt
         ))
         .ToListAsync();
 
-    return Results.Ok(rotas);
+    return Results.Ok(routes);
 });
 
-app.MapPost("/api/rotas", async (AppDbContext db, RotaCreateRequest request) =>
+app.MapPost("/api/routes", async (AppDbContext db, RouteCreateRequest request) =>
 {
-    var transportadora = await db.Transportadoras.FindAsync(request.TransportadoraId);
-    if (transportadora is null || !transportadora.Ativa)
-    {
-        return Results.BadRequest("Transportadora inválida ou inativa.");
-    }
+    var carrier = await db.Carriers.FindAsync(request.CarrierId);
+    if (carrier is null || !carrier.IsActive)
+        return Results.BadRequest("Invalid or inactive carrier.");
 
-    var validation = ValidarRotaFinanceira(request.ValorFixo, request.ValorPorPacote, request.QuantidadePacotes);
+    var validation = ValidateRouteFinancials(request.FixedAmount, request.AmountPerPackage, request.PackageCount);
     if (!validation.IsValid)
-    {
         return Results.BadRequest(validation.ErrorMessage);
-    }
 
-    var rota = new Rota
+    var route = new DeliveryRoute
     {
-        TransportadoraId = request.TransportadoraId,
-        DataRota = request.DataRota,
-        ValorFixo = request.ValorFixo,
-        ValorPorPacote = request.ValorPorPacote,
-        QuantidadePacotes = request.QuantidadePacotes,
-        ValorTotalCalculado = CalcularValorTotal(request.ValorFixo, request.ValorPorPacote, request.QuantidadePacotes),
+        CarrierId = request.CarrierId,
+        RouteDate = request.RouteDate,
+        FixedAmount = request.FixedAmount,
+        AmountPerPackage = request.AmountPerPackage,
+        PackageCount = request.PackageCount,
+        TotalAmount = CalculateTotalAmount(request.FixedAmount, request.AmountPerPackage, request.PackageCount),
+        Notes = string.IsNullOrWhiteSpace(request.Notes) ? null : request.Notes.Trim(),
         CreatedAt = DateTime.UtcNow
     };
 
-    db.Rotas.Add(rota);
+    db.Routes.Add(route);
     await db.SaveChangesAsync();
 
-    return Results.Created($"/api/rotas/{rota.Id}", rota);
+    return Results.Created($"/api/routes/{route.Id}", route);
 });
 
-app.MapPut("/api/rotas/{id:int}", async (AppDbContext db, int id, RotaCreateRequest request) =>
+app.MapPut("/api/routes/{id:int}", async (AppDbContext db, int id, RouteCreateRequest request) =>
 {
-    var rota = await db.Rotas.FindAsync(id);
-    if (rota is null)
-    {
+    var route = await db.Routes.FindAsync(id);
+    if (route is null)
         return Results.NotFound();
-    }
 
-    var transportadora = await db.Transportadoras.FindAsync(request.TransportadoraId);
-    if (transportadora is null || !transportadora.Ativa)
-    {
-        return Results.BadRequest("Transportadora inválida ou inativa.");
-    }
+    var carrier = await db.Carriers.FindAsync(request.CarrierId);
+    if (carrier is null || !carrier.IsActive)
+        return Results.BadRequest("Invalid or inactive carrier.");
 
-    var validation = ValidarRotaFinanceira(request.ValorFixo, request.ValorPorPacote, request.QuantidadePacotes);
+    var validation = ValidateRouteFinancials(request.FixedAmount, request.AmountPerPackage, request.PackageCount);
     if (!validation.IsValid)
-    {
         return Results.BadRequest(validation.ErrorMessage);
-    }
 
-    rota.TransportadoraId = request.TransportadoraId;
-    rota.DataRota = request.DataRota;
-    rota.ValorFixo = request.ValorFixo;
-    rota.ValorPorPacote = request.ValorPorPacote;
-    rota.QuantidadePacotes = request.QuantidadePacotes;
-    rota.ValorTotalCalculado = CalcularValorTotal(request.ValorFixo, request.ValorPorPacote, request.QuantidadePacotes);
+    route.CarrierId = request.CarrierId;
+    route.RouteDate = request.RouteDate;
+    route.FixedAmount = request.FixedAmount;
+    route.AmountPerPackage = request.AmountPerPackage;
+    route.PackageCount = request.PackageCount;
+    route.TotalAmount = CalculateTotalAmount(request.FixedAmount, request.AmountPerPackage, request.PackageCount);
+    route.Notes = string.IsNullOrWhiteSpace(request.Notes) ? null : request.Notes.Trim();
     await db.SaveChangesAsync();
 
-    return Results.Ok(rota);
+    return Results.Ok(route);
 });
 
-app.MapGet("/api/pnrs", async (AppDbContext db, int? rotaId = null, DateOnly? startDate = null, DateOnly? endDate = null) =>
+// ── Discounts ─────────────────────────────────────────────────────────────────
+
+app.MapGet("/api/discounts", async (AppDbContext db, int? routeId = null, DateOnly? startDate = null, DateOnly? endDate = null) =>
 {
-    var query = db.Pnrs
-        .Include(x => x.Rota)
-        .ThenInclude(r => r.Transportadora)
+    var query = db.Discounts
+        .Include(x => x.Route)
+        .ThenInclude(r => r.Carrier)
         .AsQueryable();
 
-    if (rotaId.HasValue)
-    {
-        query = query.Where(x => x.RotaId == rotaId.Value);
-    }
-
+    if (routeId.HasValue)
+        query = query.Where(x => x.RouteId == routeId.Value);
     if (startDate.HasValue)
-    {
-        query = query.Where(x => x.DataPnr >= startDate.Value);
-    }
-
+        query = query.Where(x => x.DiscountDate >= startDate.Value);
     if (endDate.HasValue)
-    {
-        query = query.Where(x => x.DataPnr <= endDate.Value);
-    }
+        query = query.Where(x => x.DiscountDate <= endDate.Value);
 
-    var pnrs = await query
-        .OrderByDescending(x => x.DataPnr)
+    var discounts = await query
+        .OrderByDescending(x => x.DiscountDate)
         .ThenByDescending(x => x.CreatedAt)
-        .Select(x => new PnrResponse(
+        .Select(x => new DiscountResponse(
             x.Id,
-            x.RotaId,
-            x.Rota.Transportadora.Nome,
-            x.Rota.DataRota,
-            x.DataPnr,
-            x.ValorDesconto,
-            x.Observacao,
+            x.RouteId,
+            x.Route.Carrier.Name,
+            x.Route.RouteDate,
+            x.DiscountDate,
+            x.DiscountAmount,
+            x.Notes,
             x.CreatedAt
         ))
         .ToListAsync();
 
-    return Results.Ok(pnrs);
+    return Results.Ok(discounts);
 });
 
-app.MapPost("/api/pnrs", async (AppDbContext db, PnrCreateRequest request) =>
+app.MapPost("/api/discounts", async (AppDbContext db, DiscountCreateRequest request) =>
 {
-    var rota = await db.Rotas.FindAsync(request.RotaId);
-    if (rota is null)
-    {
-        return Results.BadRequest("Rota não encontrada.");
-    }
+    var route = await db.Routes.FindAsync(request.RouteId);
+    if (route is null)
+        return Results.BadRequest("Route not found.");
 
-    if (request.ValorDesconto <= 0)
-    {
-        return Results.BadRequest("Valor do desconto deve ser maior que zero.");
-    }
+    if (request.DiscountAmount <= 0)
+        return Results.BadRequest("Discount amount must be greater than zero.");
 
-    var pnr = new Pnr
+    var discount = new Discount
     {
-        RotaId = request.RotaId,
-        DataPnr = request.DataPnr,
-        ValorDesconto = request.ValorDesconto,
-        Observacao = string.IsNullOrWhiteSpace(request.Observacao) ? null : request.Observacao.Trim(),
+        RouteId = request.RouteId,
+        DiscountDate = request.DiscountDate,
+        DiscountAmount = request.DiscountAmount,
+        Notes = string.IsNullOrWhiteSpace(request.Notes) ? null : request.Notes.Trim(),
         CreatedAt = DateTime.UtcNow
     };
 
-    db.Pnrs.Add(pnr);
+    db.Discounts.Add(discount);
     await db.SaveChangesAsync();
 
-    return Results.Created($"/api/pnrs/{pnr.Id}", pnr);
+    return Results.Created($"/api/discounts/{discount.Id}", discount);
 });
 
-app.MapDelete("/api/pnrs/{id:int}", async (AppDbContext db, int id) =>
+app.MapDelete("/api/discounts/{id:int}", async (AppDbContext db, int id) =>
 {
-    var pnr = await db.Pnrs.FindAsync(id);
-    if (pnr is null)
-    {
+    var discount = await db.Discounts.FindAsync(id);
+    if (discount is null)
         return Results.NotFound();
-    }
 
-    db.Pnrs.Remove(pnr);
+    db.Discounts.Remove(discount);
     await db.SaveChangesAsync();
     return Results.NoContent();
 });
 
-app.MapGet("/api/payments", async (AppDbContext db, DateOnly? startDate = null, DateOnly? endDate = null, int? transportadoraId = null, bool onlyActive = false) =>
+// ── Payments ──────────────────────────────────────────────────────────────────
+
+app.MapGet("/api/payments", async (AppDbContext db, DateOnly? startDate = null, DateOnly? endDate = null, int? carrierId = null, bool onlyActive = false) =>
 {
     var inicio = startDate ?? DateOnly.FromDateTime(DateTime.Today);
     var fim = endDate ?? inicio;
 
     if (inicio > fim)
-    {
-        return Results.BadRequest("Período inválido.");
-    }
+        return Results.BadRequest("Invalid period.");
 
-    var transportadorasQuery = db.Transportadoras.AsQueryable();
-    if (transportadoraId.HasValue)
-    {
-        transportadorasQuery = transportadorasQuery.Where(t => t.Id == transportadoraId.Value);
-    }
+    var carriersQuery = db.Carriers.AsQueryable();
+    if (carrierId.HasValue)
+        carriersQuery = carriersQuery.Where(c => c.Id == carrierId.Value);
     if (onlyActive)
-    {
-        transportadorasQuery = transportadorasQuery.Where(t => t.Ativa);
-    }
+        carriersQuery = carriersQuery.Where(c => c.IsActive);
 
-    var transportadorasList = await transportadorasQuery
-        .Include(t => t.PaymentSchedule)
+    var carriers = await carriersQuery
+        .Include(c => c.PaymentSchedule)
         .ToListAsync();
 
     var results = new List<PaymentListItemResponse>();
 
-    foreach (var t in transportadorasList)
+    foreach (var c in carriers)
     {
-        var schedule = t.PaymentSchedule;
+        var schedule = c.PaymentSchedule;
         if (schedule is null) continue;
 
         if (schedule.Frequency == "weekly")
@@ -497,7 +421,6 @@ app.MapGet("/api/payments", async (AppDbContext db, DateOnly? startDate = null, 
                 DateOnly periodStart, periodEnd;
                 if (schedule.WeekStartDay.HasValue)
                 {
-                    // Period ends the day before the week start (i.e. week-end day)
                     var weekEndDay = (schedule.WeekStartDay.Value - 1 + 7) % 7;
                     var daysBack = ((int)scheduledDate.DayOfWeek - weekEndDay + 7) % 7;
                     periodEnd = scheduledDate.AddDays(-daysBack);
@@ -509,29 +432,21 @@ app.MapGet("/api/payments", async (AppDbContext db, DateOnly? startDate = null, 
                     periodStart = scheduledDate.AddDays(-6);
                 }
 
-                var rotasInPeriod = await db.Rotas
-                    .Include(r => r.Pnrs)
-                    .Where(r => r.TransportadoraId == t.Id && r.DataRota >= periodStart && r.DataRota <= periodEnd)
+                var routesInPeriod = await db.Routes
+                    .Include(r => r.Discounts)
+                    .Where(r => r.CarrierId == c.Id && r.RouteDate >= periodStart && r.RouteDate <= periodEnd)
                     .ToListAsync();
 
-                var ganhosBrutos = rotasInPeriod.Sum(r => r.ValorTotalCalculado);
-                var descontosPnr = rotasInPeriod.SelectMany(r => r.Pnrs).Sum(p => p.ValorDesconto);
-                var amountDue = ganhosBrutos - descontosPnr;
+                var grossEarnings = routesInPeriod.Sum(r => r.TotalAmount);
+                var totalDiscounts = routesInPeriod.SelectMany(r => r.Discounts).Sum(d => d.DiscountAmount);
+                var amountDue = grossEarnings - totalDiscounts;
 
-                var payment = await db.Payments.FirstOrDefaultAsync(p => p.TransportadoraId == t.Id && p.PeriodStart == periodStart && p.PeriodEnd == periodEnd);
+                var payment = await db.Payments.FirstOrDefaultAsync(p => p.CarrierId == c.Id && p.PeriodStart == periodStart && p.PeriodEnd == periodEnd);
 
                 results.Add(new PaymentListItemResponse(
-                    t.Id,
-                    t.Nome,
-                    periodStart,
-                    periodEnd,
-                    scheduledDate,
-                    ganhosBrutos,
-                    descontosPnr,
-                    amountDue,
-                    payment?.AmountReceived,
-                    payment?.ReceivedAt,
-                    payment is not null
+                    c.Id, c.Name, periodStart, periodEnd, scheduledDate,
+                    grossEarnings, totalDiscounts, amountDue,
+                    payment?.AmountReceived, payment?.ReceivedAt, payment is not null
                 ));
 
                 scheduledDate = scheduledDate.AddDays(7);
@@ -545,36 +460,39 @@ app.MapGet("/api/payments", async (AppDbContext db, DateOnly? startDate = null, 
                 var year = iterateMonth.Year;
                 var month = iterateMonth.Month;
                 var lastDay = DateTime.DaysInMonth(year, month);
-                var preferredDay = schedule.DayOfMonth ?? 15;
-                var firstDay = Math.Min(preferredDay, lastDay);
-                var firstHalfScheduled = new DateOnly(year, month, firstDay);
+                var splitDay = Math.Min(schedule.DayOfMonth ?? 15, lastDay);
+
+                var firstHalfStart = new DateOnly(year, month, 1);
+                var firstHalfEnd = new DateOnly(year, month, splitDay);
+                var firstHalfScheduled = new DateOnly(year, month, lastDay);
 
                 if (firstHalfScheduled >= inicio && firstHalfScheduled <= fim)
                 {
-                    var periodStart = new DateOnly(year, month, 1);
-                    var periodEnd = firstHalfScheduled;
-                    var rotasInPeriod = await db.Rotas.Include(r => r.Pnrs).Where(r => r.TransportadoraId == t.Id && r.DataRota >= periodStart && r.DataRota <= periodEnd).ToListAsync();
-                    var ganhosBrutos = rotasInPeriod.Sum(r => r.ValorTotalCalculado);
-                    var descontosPnr = rotasInPeriod.SelectMany(r => r.Pnrs).Sum(p => p.ValorDesconto);
-                    var amountDue = ganhosBrutos - descontosPnr;
-                    var payment = await db.Payments.FirstOrDefaultAsync(p => p.TransportadoraId == t.Id && p.PeriodStart == periodStart && p.PeriodEnd == periodEnd);
-                    results.Add(new PaymentListItemResponse(t.Id, t.Nome, periodStart, periodEnd, firstHalfScheduled, ganhosBrutos, descontosPnr, amountDue, payment?.AmountReceived, payment?.ReceivedAt, payment is not null));
+                    var routesInPeriod = await db.Routes.Include(r => r.Discounts).Where(r => r.CarrierId == c.Id && r.RouteDate >= firstHalfStart && r.RouteDate <= firstHalfEnd).ToListAsync();
+                    var grossEarnings = routesInPeriod.Sum(r => r.TotalAmount);
+                    var totalDiscounts = routesInPeriod.SelectMany(r => r.Discounts).Sum(d => d.DiscountAmount);
+                    var amountDue = grossEarnings - totalDiscounts;
+                    var payment = await db.Payments.FirstOrDefaultAsync(p => p.CarrierId == c.Id && p.PeriodStart == firstHalfStart && p.PeriodEnd == firstHalfEnd);
+                    results.Add(new PaymentListItemResponse(c.Id, c.Name, firstHalfStart, firstHalfEnd, firstHalfScheduled, grossEarnings, totalDiscounts, amountDue, payment?.AmountReceived, payment?.ReceivedAt, payment is not null));
                 }
 
-                if (firstDay < lastDay)
+                if (splitDay < lastDay)
                 {
-                    var secondHalfScheduled = new DateOnly(year, month, lastDay);
-                    var periodStart = new DateOnly(year, month, firstDay + 1);
-                    var periodEnd = secondHalfScheduled;
+                    var nextMonth = iterateMonth.AddMonths(1);
+                    var nextMonthLastDay = DateTime.DaysInMonth(nextMonth.Year, nextMonth.Month);
+                    var secondHalfPayDay = Math.Min(splitDay, nextMonthLastDay);
+                    var secondHalfScheduled = new DateOnly(nextMonth.Year, nextMonth.Month, secondHalfPayDay);
+                    var secondHalfStart = new DateOnly(year, month, splitDay + 1);
+                    var secondHalfEnd = new DateOnly(year, month, lastDay);
 
                     if (secondHalfScheduled >= inicio && secondHalfScheduled <= fim)
                     {
-                        var rotasInPeriod = await db.Rotas.Include(r => r.Pnrs).Where(r => r.TransportadoraId == t.Id && r.DataRota >= periodStart && r.DataRota <= periodEnd).ToListAsync();
-                        var ganhosBrutos = rotasInPeriod.Sum(r => r.ValorTotalCalculado);
-                        var descontosPnr = rotasInPeriod.SelectMany(r => r.Pnrs).Sum(p => p.ValorDesconto);
-                        var amountDue = ganhosBrutos - descontosPnr;
-                        var payment = await db.Payments.FirstOrDefaultAsync(p => p.TransportadoraId == t.Id && p.PeriodStart == periodStart && p.PeriodEnd == periodEnd);
-                        results.Add(new PaymentListItemResponse(t.Id, t.Nome, periodStart, periodEnd, secondHalfScheduled, ganhosBrutos, descontosPnr, amountDue, payment?.AmountReceived, payment?.ReceivedAt, payment is not null));
+                        var routesInPeriod = await db.Routes.Include(r => r.Discounts).Where(r => r.CarrierId == c.Id && r.RouteDate >= secondHalfStart && r.RouteDate <= secondHalfEnd).ToListAsync();
+                        var grossEarnings = routesInPeriod.Sum(r => r.TotalAmount);
+                        var totalDiscounts = routesInPeriod.SelectMany(r => r.Discounts).Sum(d => d.DiscountAmount);
+                        var amountDue = grossEarnings - totalDiscounts;
+                        var payment = await db.Payments.FirstOrDefaultAsync(p => p.CarrierId == c.Id && p.PeriodStart == secondHalfStart && p.PeriodEnd == secondHalfEnd);
+                        results.Add(new PaymentListItemResponse(c.Id, c.Name, secondHalfStart, secondHalfEnd, secondHalfScheduled, grossEarnings, totalDiscounts, amountDue, payment?.AmountReceived, payment?.ReceivedAt, payment is not null));
                     }
                 }
 
@@ -583,43 +501,36 @@ app.MapGet("/api/payments", async (AppDbContext db, DateOnly? startDate = null, 
         }
     }
 
-    var ordered = results.OrderBy(x => x.ScheduledDate).ThenBy(x => x.TransportadoraNome).ToList();
-    return Results.Ok(ordered);
+    return Results.Ok(results.OrderBy(x => x.ScheduledDate).ThenBy(x => x.CarrierName).ToList());
 });
 
 app.MapPost("/api/payments", async (AppDbContext db, PaymentCreateRequest request) =>
 {
-    var transportadora = await db.Transportadoras.FindAsync(request.TransportadoraId);
-    if (transportadora is null)
-    {
-        return Results.BadRequest("Transportadora inválida.");
-    }
+    var carrier = await db.Carriers.FindAsync(request.CarrierId);
+    if (carrier is null)
+        return Results.BadRequest("Invalid carrier.");
 
-    var rotasInPeriod = await db.Rotas.Include(r => r.Pnrs)
-        .Where(r => r.TransportadoraId == request.TransportadoraId && r.DataRota >= request.PeriodStart && r.DataRota <= request.PeriodEnd)
+    var routesInPeriod = await db.Routes.Include(r => r.Discounts)
+        .Where(r => r.CarrierId == request.CarrierId && r.RouteDate >= request.PeriodStart && r.RouteDate <= request.PeriodEnd)
         .ToListAsync();
 
-    var ganhosBrutos = rotasInPeriod.Sum(r => r.ValorTotalCalculado);
-    var descontosPnr = rotasInPeriod.SelectMany(r => r.Pnrs).Sum(p => p.ValorDesconto);
-    var amountDue = ganhosBrutos - descontosPnr;
+    var grossEarnings = routesInPeriod.Sum(r => r.TotalAmount);
+    var totalDiscounts = routesInPeriod.SelectMany(r => r.Discounts).Sum(d => d.DiscountAmount);
+    var amountDue = grossEarnings - totalDiscounts;
 
     if (amountDue != request.AmountReceived)
-    {
-        return Results.BadRequest("Valor recebido deve ser igual ao valor devido. Pagamentos parciais não são permitidos.");
-    }
+        return Results.BadRequest("Amount received must equal amount due. Partial payments are not allowed.");
 
-    var exists = await db.Payments.AnyAsync(p => p.TransportadoraId == request.TransportadoraId && p.PeriodStart == request.PeriodStart && p.PeriodEnd == request.PeriodEnd);
+    var exists = await db.Payments.AnyAsync(p => p.CarrierId == request.CarrierId && p.PeriodStart == request.PeriodStart && p.PeriodEnd == request.PeriodEnd);
     if (exists)
-    {
-        return Results.Conflict("Pagamento já registrado para este período.");
-    }
+        return Results.Conflict("Payment already registered for this period.");
 
     var payment = new Payment
     {
-        TransportadoraId = request.TransportadoraId,
+        CarrierId = request.CarrierId,
         PeriodStart = request.PeriodStart,
         PeriodEnd = request.PeriodEnd,
-        ScheduledDate = request.PeriodEnd,
+        ScheduledDate = request.ScheduledDate,
         AmountReceived = request.AmountReceived,
         ReceivedAt = DateTime.UtcNow,
         Notes = request.Notes,
@@ -632,244 +543,299 @@ app.MapPost("/api/payments", async (AppDbContext db, PaymentCreateRequest reques
     return Results.Created($"/api/payments/{payment.Id}", payment);
 });
 
-app.MapGet("/api/dashboard/summary", async (AppDbContext db, DateOnly? startDate = null, DateOnly? endDate = null, int? transportadoraId = null, bool onlyActive = false) =>
+// ── Dashboard ─────────────────────────────────────────────────────────────────
+
+app.MapGet("/api/dashboard/summary", async (AppDbContext db, DateOnly? startDate = null, DateOnly? endDate = null, int? carrierId = null, bool onlyActive = false) =>
 {
     var inicio = startDate ?? DateOnly.FromDateTime(DateTime.Today);
     var fim = endDate ?? inicio;
 
     if (inicio > fim)
-    {
-        return Results.BadRequest("Período inválido.");
-    }
+        return Results.BadRequest("Invalid period.");
 
-    var query = db.Rotas
-        .Include(x => x.Pnrs)
-        .Include(x => x.Transportadora)
-        .Where(x => x.DataRota >= inicio && x.DataRota <= fim);
+    var query = db.Routes
+        .Include(x => x.Discounts)
+        .Include(x => x.Carrier)
+        .Where(x => x.RouteDate >= inicio && x.RouteDate <= fim);
 
-    if (transportadoraId.HasValue)
-    {
-        query = query.Where(x => x.TransportadoraId == transportadoraId.Value);
-    }
-
+    if (carrierId.HasValue)
+        query = query.Where(x => x.CarrierId == carrierId.Value);
     if (onlyActive)
-    {
-        query = query.Where(x => x.Transportadora.Ativa);
-    }
+        query = query.Where(x => x.Carrier.IsActive);
 
-    var rotas = await query.ToListAsync();
+    var routes = await query.ToListAsync();
 
-    var ganhosBrutos = rotas.Sum(x => x.ValorTotalCalculado);
-    var descontosPnr = rotas.SelectMany(x => x.Pnrs).Sum(x => x.ValorDesconto);
-    var totalPacotes = rotas.Sum(x => x.QuantidadePacotes);
-    var diasTrabalhados = rotas.Select(x => x.DataRota).Distinct().Count();
+    var grossEarnings = routes.Sum(x => x.TotalAmount);
+    var totalDiscounts = routes.SelectMany(x => x.Discounts).Sum(x => x.DiscountAmount);
+    var totalPackages = routes.Sum(x => x.PackageCount);
+    var workingDays = routes.Select(x => x.RouteDate).Distinct().Count();
+    var netEarnings = grossEarnings - totalDiscounts;
+
+    var totalFuel = await db.FuelEntries
+        .Where(x => x.EntryDate >= inicio && x.EntryDate <= fim)
+        .SumAsync(x => x.TotalCost);
 
     return Results.Ok(new DashboardSummaryResponse(
-        inicio,
-        fim,
-        rotas.Count,
-        totalPacotes,
-        diasTrabalhados,
-        ganhosBrutos,
-        descontosPnr,
-        ganhosBrutos - descontosPnr
+        inicio, fim, routes.Count, totalPackages, workingDays,
+        grossEarnings, totalDiscounts, netEarnings,
+        totalFuel, netEarnings - totalFuel
     ));
 });
 
-app.MapGet("/api/dashboard/previsao", async (AppDbContext db, DateOnly? startDate = null, DateOnly? endDate = null, int? transportadoraId = null, bool onlyActive = false) =>
+app.MapGet("/api/dashboard/forecast", async (AppDbContext db, DateOnly? startDate = null, DateOnly? endDate = null, int? carrierId = null, bool onlyActive = false) =>
 {
     var inicio = startDate ?? DateOnly.FromDateTime(DateTime.Today);
     var fim = endDate ?? inicio;
 
-    var query = db.Rotas
-        .Include(x => x.Transportadora)
-        .Include(x => x.Pnrs)
-        .Where(x => x.DataRota >= inicio && x.DataRota <= fim);
+    var query = db.Routes
+        .Include(x => x.Carrier)
+        .Include(x => x.Discounts)
+        .Where(x => x.RouteDate >= inicio && x.RouteDate <= fim);
 
-    if (transportadoraId.HasValue)
-    {
-        query = query.Where(x => x.TransportadoraId == transportadoraId.Value);
-    }
-
+    if (carrierId.HasValue)
+        query = query.Where(x => x.CarrierId == carrierId.Value);
     if (onlyActive)
-    {
-        query = query.Where(x => x.Transportadora.Ativa);
-    }
+        query = query.Where(x => x.Carrier.IsActive);
 
-    var rotas = await query.ToListAsync();
+    var routes = await query.ToListAsync();
 
-    var previsao = rotas
-        .GroupBy(x => new { x.DataRota, x.TransportadoraId, x.Transportadora.Nome })
-        .Select(g => new DashboardPrevisaoItemResponse(
-            g.Key.DataRota,
-            g.Key.TransportadoraId,
-            g.Key.Nome,
+    var forecast = routes
+        .GroupBy(x => new { x.RouteDate, x.CarrierId, x.Carrier.Name })
+        .Select(g => new DashboardForecastItemResponse(
+            g.Key.RouteDate,
+            g.Key.CarrierId,
+            g.Key.Name,
             g.Count(),
-            g.Sum(x => x.ValorTotalCalculado),
-            g.SelectMany(x => x.Pnrs).Sum(x => x.ValorDesconto),
-            g.Sum(x => x.ValorTotalCalculado) - g.SelectMany(x => x.Pnrs).Sum(x => x.ValorDesconto)
+            g.Sum(x => x.TotalAmount),
+            g.SelectMany(x => x.Discounts).Sum(x => x.DiscountAmount),
+            g.Sum(x => x.TotalAmount) - g.SelectMany(x => x.Discounts).Sum(x => x.DiscountAmount)
         ))
-        .OrderBy(x => x.DataRota)
-        .ThenBy(x => x.TransportadoraNome)
+        .OrderBy(x => x.RouteDate)
+        .ThenBy(x => x.CarrierName)
         .ToList();
 
-    return Results.Ok(previsao);
+    return Results.Ok(forecast);
 });
 
-app.MapGet("/api/dashboard/historico", async (AppDbContext db, DateOnly? startDate = null, DateOnly? endDate = null, int? transportadoraId = null, bool onlyActive = false) =>
+app.MapGet("/api/dashboard/history", async (AppDbContext db, DateOnly? startDate = null, DateOnly? endDate = null, int? carrierId = null, bool onlyActive = false) =>
 {
     var inicio = startDate ?? DateOnly.FromDateTime(DateTime.Today.AddDays(-30));
     var fim = endDate ?? DateOnly.FromDateTime(DateTime.Today);
 
-    var query = db.Rotas
-        .Include(x => x.Pnrs)
-        .Include(x => x.Transportadora)
-        .Where(x => x.DataRota >= inicio && x.DataRota <= fim);
+    var query = db.Routes
+        .Include(x => x.Discounts)
+        .Include(x => x.Carrier)
+        .Where(x => x.RouteDate >= inicio && x.RouteDate <= fim);
 
-    if (transportadoraId.HasValue)
-    {
-        query = query.Where(x => x.TransportadoraId == transportadoraId.Value);
-    }
-
+    if (carrierId.HasValue)
+        query = query.Where(x => x.CarrierId == carrierId.Value);
     if (onlyActive)
-    {
-        query = query.Where(x => x.Transportadora.Ativa);
-    }
+        query = query.Where(x => x.Carrier.IsActive);
 
-    var rotas = await query.ToListAsync();
+    var routes = await query.ToListAsync();
 
-    var historico = rotas
-        .GroupBy(x => x.DataRota)
-        .Select(g => new DashboardHistoricoItemResponse(
+    var history = routes
+        .GroupBy(x => x.RouteDate)
+        .Select(g => new DashboardHistoryItemResponse(
             g.Key,
             g.Count(),
-            g.Sum(x => x.ValorTotalCalculado),
-            g.SelectMany(x => x.Pnrs).Sum(x => x.ValorDesconto),
-            g.Sum(x => x.ValorTotalCalculado) - g.SelectMany(x => x.Pnrs).Sum(x => x.ValorDesconto)
+            g.Sum(x => x.TotalAmount),
+            g.SelectMany(x => x.Discounts).Sum(x => x.DiscountAmount),
+            g.Sum(x => x.TotalAmount) - g.SelectMany(x => x.Discounts).Sum(x => x.DiscountAmount)
         ))
-        .OrderBy(x => x.Data)
+        .OrderBy(x => x.Date)
         .ToList();
 
-    return Results.Ok(historico);
+    return Results.Ok(history);
+});
+
+// ── Fuel Entries ─────────────────────────────────────────────────────────────
+
+app.MapGet("/api/fuel-entries", async (AppDbContext db, DateOnly? startDate = null, DateOnly? endDate = null) =>
+{
+    var query = db.FuelEntries.AsQueryable();
+
+    if (startDate.HasValue)
+        query = query.Where(x => x.EntryDate >= startDate.Value);
+    if (endDate.HasValue)
+        query = query.Where(x => x.EntryDate <= endDate.Value);
+
+    var entries = await query
+        .OrderByDescending(x => x.EntryDate)
+        .ThenByDescending(x => x.CreatedAt)
+        .Select(x => new FuelEntryResponse(x.Id, x.EntryDate, x.FuelType, x.Liters, x.TotalCost, x.Notes, x.CreatedAt))
+        .ToListAsync();
+
+    return Results.Ok(entries);
+});
+
+app.MapPost("/api/fuel-entries", async (AppDbContext db, FuelEntryCreateRequest request) =>
+{
+    if (string.IsNullOrWhiteSpace(request.FuelType) || (request.FuelType != "gasoline" && request.FuelType != "ethanol"))
+        return Results.BadRequest("Invalid fuel type. Use 'gasoline' or 'ethanol'.");
+
+    if (request.TotalCost <= 0)
+        return Results.BadRequest("Total cost must be greater than zero.");
+
+    if (request.Liters.HasValue && request.Liters.Value <= 0)
+        return Results.BadRequest("Liters must be greater than zero.");
+
+    var entry = new FuelEntry
+    {
+        EntryDate = request.EntryDate,
+        FuelType = request.FuelType,
+        Liters = request.Liters,
+        TotalCost = request.TotalCost,
+        Notes = string.IsNullOrWhiteSpace(request.Notes) ? null : request.Notes.Trim(),
+        CreatedAt = DateTime.UtcNow
+    };
+
+    db.FuelEntries.Add(entry);
+    await db.SaveChangesAsync();
+
+    return Results.Created($"/api/fuel-entries/{entry.Id}", entry);
+});
+
+app.MapDelete("/api/fuel-entries/{id:int}", async (AppDbContext db, int id) =>
+{
+    var entry = await db.FuelEntries.FindAsync(id);
+    if (entry is null)
+        return Results.NotFound();
+
+    db.FuelEntries.Remove(entry);
+    await db.SaveChangesAsync();
+    return Results.NoContent();
 });
 
 app.MapPost("/api/clear-test-data", async (AppDbContext db) =>
 {
     db.PaymentSchedules.RemoveRange(db.PaymentSchedules);
     db.Payments.RemoveRange(db.Payments);
-    db.Transportadoras.RemoveRange(db.Transportadoras);
-    db.Rotas.RemoveRange(db.Rotas);
-    db.Pnrs.RemoveRange(db.Pnrs);
+    db.Carriers.RemoveRange(db.Carriers);
+    db.Routes.RemoveRange(db.Routes);
+    db.Discounts.RemoveRange(db.Discounts);
+    db.FuelEntries.RemoveRange(db.FuelEntries);
     await db.SaveChangesAsync();
-    return Results.Ok("Dados de teste removidos com sucesso.");
+    return Results.Ok("Test data cleared.");
 });
 
 app.Run();
 
-static (bool IsValid, string? ErrorMessage) ValidarRotaFinanceira(decimal? valorFixo, decimal? valorPorPacote, int quantidadePacotes)
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+static (bool IsValid, string? ErrorMessage) ValidateRouteFinancials(decimal? fixedAmount, decimal? amountPerPackage, int packageCount)
 {
-    if (!valorFixo.HasValue && !valorPorPacote.HasValue)
-    {
-        return (false, "Informe valor fixo, valor por pacote ou ambos.");
-    }
-
-    if (valorPorPacote.HasValue && quantidadePacotes <= 0)
-    {
-        return (false, "Quantidade de pacotes é obrigatória quando houver valor por pacote.");
-    }
-
-    if (valorFixo.HasValue && valorFixo.Value < 0)
-    {
-        return (false, "Valor fixo não pode ser negativo.");
-    }
-
-    if (valorPorPacote.HasValue && valorPorPacote.Value < 0)
-    {
-        return (false, "Valor por pacote não pode ser negativo.");
-    }
-
+    if (!fixedAmount.HasValue && !amountPerPackage.HasValue)
+        return (false, "Provide fixed amount, amount per package, or both.");
+    if (amountPerPackage.HasValue && packageCount <= 0)
+        return (false, "Package count is required when amount per package is set.");
+    if (fixedAmount.HasValue && fixedAmount.Value < 0)
+        return (false, "Fixed amount cannot be negative.");
+    if (amountPerPackage.HasValue && amountPerPackage.Value < 0)
+        return (false, "Amount per package cannot be negative.");
     return (true, null);
 }
 
-static decimal CalcularValorTotal(decimal? valorFixo, decimal? valorPorPacote, int quantidadePacotes)
+static decimal CalculateTotalAmount(decimal? fixedAmount, decimal? amountPerPackage, int packageCount)
 {
-    var fixo = valorFixo ?? 0m;
-    var variavel = (valorPorPacote ?? 0m) * quantidadePacotes;
-    return fixo + variavel;
+    var fixedPart = fixedAmount ?? 0m;
+    var variablePart = (amountPerPackage ?? 0m) * packageCount;
+    return fixedPart + variablePart;
 }
+
+// ── DbContext ─────────────────────────────────────────────────────────────────
 
 public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(options)
 {
-    public DbSet<Transportadora> Transportadoras => Set<Transportadora>();
-    public DbSet<Rota> Rotas => Set<Rota>();
-    public DbSet<Pnr> Pnrs => Set<Pnr>();
+    public DbSet<Carrier> Carriers => Set<Carrier>();
+    public DbSet<DeliveryRoute> Routes => Set<DeliveryRoute>();
+    public DbSet<Discount> Discounts => Set<Discount>();
     public DbSet<PaymentSchedule> PaymentSchedules => Set<PaymentSchedule>();
     public DbSet<Payment> Payments => Set<Payment>();
+    public DbSet<FuelEntry> FuelEntries => Set<FuelEntry>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
-        modelBuilder.Entity<Transportadora>().Property(x => x.Nome).HasMaxLength(120).IsRequired();
-        modelBuilder.Entity<Rota>().Property(x => x.ValorTotalCalculado).HasColumnType("decimal(18,2)");
-        modelBuilder.Entity<Rota>().Property(x => x.ValorFixo).HasColumnType("decimal(18,2)");
-        modelBuilder.Entity<Rota>().Property(x => x.ValorPorPacote).HasColumnType("decimal(18,2)");
-        modelBuilder.Entity<Pnr>().Property(x => x.ValorDesconto).HasColumnType("decimal(18,2)");
-        modelBuilder.Entity<Pnr>().Property(x => x.Observacao).HasMaxLength(300);
+        modelBuilder.Entity<Carrier>().Property(x => x.Name).HasMaxLength(120).IsRequired();
+        modelBuilder.Entity<DeliveryRoute>().Property(x => x.TotalAmount).HasColumnType("decimal(18,2)");
+        modelBuilder.Entity<DeliveryRoute>().Property(x => x.FixedAmount).HasColumnType("decimal(18,2)");
+        modelBuilder.Entity<DeliveryRoute>().Property(x => x.AmountPerPackage).HasColumnType("decimal(18,2)");
+        modelBuilder.Entity<DeliveryRoute>().Property(x => x.Notes).HasMaxLength(300);
+        modelBuilder.Entity<Discount>().Property(x => x.DiscountAmount).HasColumnType("decimal(18,2)");
+        modelBuilder.Entity<Discount>().Property(x => x.Notes).HasMaxLength(300);
         modelBuilder.Entity<PaymentSchedule>().Property(x => x.Frequency).HasMaxLength(20).IsRequired();
         modelBuilder.Entity<PaymentSchedule>().Property(x => x.Weekday);
         modelBuilder.Entity<PaymentSchedule>().Property(x => x.DayOfMonth);
-
         modelBuilder.Entity<Payment>().Property(x => x.AmountReceived).HasColumnType("decimal(18,2)");
         modelBuilder.Entity<Payment>().Property(x => x.Notes).HasMaxLength(300);
+        modelBuilder.Entity<FuelEntry>().Property(x => x.TotalCost).HasColumnType("decimal(18,2)");
+        modelBuilder.Entity<FuelEntry>().Property(x => x.Liters).HasColumnType("decimal(18,3)");
+        modelBuilder.Entity<FuelEntry>().Property(x => x.FuelType).HasMaxLength(20).IsRequired();
+        modelBuilder.Entity<FuelEntry>().Property(x => x.Notes).HasMaxLength(300);
     }
 }
 
-public class Transportadora
+// ── Entities ──────────────────────────────────────────────────────────────────
+
+public class Carrier
 {
     public int Id { get; set; }
-    public string Nome { get; set; } = string.Empty;
-    public bool Ativa { get; set; } = true;
+    public string Name { get; set; } = string.Empty;
+    public bool IsActive { get; set; } = true;
     public DateTime CreatedAt { get; set; }
-    public List<Rota> Rotas { get; set; } = [];
+    public List<DeliveryRoute> Routes { get; set; } = [];
     public PaymentSchedule? PaymentSchedule { get; set; }
 }
 
-public class Rota
+public class DeliveryRoute
 {
     public int Id { get; set; }
-    public int TransportadoraId { get; set; }
-    public Transportadora Transportadora { get; set; } = null!;
-    public DateOnly DataRota { get; set; }
-    public decimal? ValorFixo { get; set; }
-    public decimal? ValorPorPacote { get; set; }
-    public int QuantidadePacotes { get; set; }
-    public decimal ValorTotalCalculado { get; set; }
+    public int CarrierId { get; set; }
+    public Carrier Carrier { get; set; } = null!;
+    public DateOnly RouteDate { get; set; }
+    public decimal? FixedAmount { get; set; }
+    public decimal? AmountPerPackage { get; set; }
+    public int PackageCount { get; set; }
+    public decimal TotalAmount { get; set; }
+    public string? Notes { get; set; }
     public DateTime CreatedAt { get; set; }
-    public List<Pnr> Pnrs { get; set; } = [];
+    public List<Discount> Discounts { get; set; } = [];
 }
 
-public class Pnr
+public class FuelEntry
 {
     public int Id { get; set; }
-    public int RotaId { get; set; }
-    public Rota Rota { get; set; } = null!;
-    public DateOnly DataPnr { get; set; }
-    public decimal ValorDesconto { get; set; }
-    public string? Observacao { get; set; }
+    public DateOnly EntryDate { get; set; }
+    public string FuelType { get; set; } = string.Empty;
+    public decimal? Liters { get; set; }
+    public decimal TotalCost { get; set; }
+    public string? Notes { get; set; }
+    public DateTime CreatedAt { get; set; }
+}
+
+public class Discount
+{
+    public int Id { get; set; }
+    public int RouteId { get; set; }
+    public DeliveryRoute Route { get; set; } = null!;
+    public DateOnly DiscountDate { get; set; }
+    public decimal DiscountAmount { get; set; }
+    public string? Notes { get; set; }
     public DateTime CreatedAt { get; set; }
 }
 
 public class PaymentSchedule
 {
     public int Id { get; set; }
-    public int TransportadoraId { get; set; }
-    public Transportadora Transportadora { get; set; } = null!;
+    public int CarrierId { get; set; }
+    public Carrier Carrier { get; set; } = null!;
     // "weekly" or "quinzena"
     public string Frequency { get; set; } = string.Empty;
     // 0 = Sunday .. 6 = Saturday (used when Frequency == "weekly")
     public int? Weekday { get; set; }
     // 1..31 (used when Frequency == "quinzena")
     public int? DayOfMonth { get; set; }
-    // 0 = Sunday .. 6 = Saturday — day the work week starts (weekly only)
+    // 0 = Sunday .. 6 = Saturday — first day of the work week (weekly only)
     public int? WeekStartDay { get; set; }
     public DateTime CreatedAt { get; set; }
 }
@@ -877,8 +843,8 @@ public class PaymentSchedule
 public class Payment
 {
     public int Id { get; set; }
-    public int TransportadoraId { get; set; }
-    public Transportadora Transportadora { get; set; } = null!;
+    public int CarrierId { get; set; }
+    public Carrier Carrier { get; set; } = null!;
     public DateOnly PeriodStart { get; set; }
     public DateOnly PeriodEnd { get; set; }
     public DateOnly ScheduledDate { get; set; }
@@ -888,81 +854,52 @@ public class Payment
     public DateTime CreatedAt { get; set; }
 }
 
-public record TransportadoraListResponse(int Id, string Nome, bool Ativa, PaymentScheduleResponse? PaymentSchedule, DateTime CreatedAt);
-public record TransportadoraCreateRequest(string Nome);
-public record TransportadoraUpdateRequest(string Nome, bool Ativa);
-public record RotaCreateRequest(int TransportadoraId, DateOnly DataRota, decimal? ValorFixo, decimal? ValorPorPacote, int QuantidadePacotes);
-public record PnrCreateRequest(int RotaId, DateOnly DataPnr, decimal ValorDesconto, string? Observacao);
+// ── DTOs ──────────────────────────────────────────────────────────────────────
+
+public record CarrierResponse(int Id, string Name, bool IsActive, PaymentScheduleResponse? PaymentSchedule, DateTime CreatedAt);
+public record CarrierCreateRequest(string Name);
+public record CarrierUpdateRequest(string Name, bool IsActive);
+
+public record RouteCreateRequest(int CarrierId, DateOnly RouteDate, decimal? FixedAmount, decimal? AmountPerPackage, int PackageCount, string? Notes = null);
+public record RouteResponse(
+    int Id, int CarrierId, string CarrierName, DateOnly RouteDate,
+    decimal? FixedAmount, decimal? AmountPerPackage, int PackageCount,
+    decimal TotalAmount, decimal TotalDiscounts, decimal NetAmount, string? Notes, DateTime CreatedAt
+);
+
+public record FuelEntryCreateRequest(DateOnly EntryDate, string FuelType, decimal? Liters, decimal TotalCost, string? Notes = null);
+public record FuelEntryResponse(int Id, DateOnly EntryDate, string FuelType, decimal? Liters, decimal TotalCost, string? Notes, DateTime CreatedAt);
+
+public record DiscountCreateRequest(int RouteId, DateOnly DiscountDate, decimal DiscountAmount, string? Notes);
+public record DiscountResponse(
+    int Id, int RouteId, string CarrierName, DateOnly RouteDate,
+    DateOnly DiscountDate, decimal DiscountAmount, string? Notes, DateTime CreatedAt
+);
 
 public record PaymentScheduleRequest(string Frequency, int? Weekday, int? DayOfMonth, int? WeekStartDay);
 public record PaymentScheduleResponse(string Frequency, int? Weekday, int? DayOfMonth, int? WeekStartDay);
 
-public record PaymentCreateRequest(int TransportadoraId, DateOnly PeriodStart, DateOnly PeriodEnd, decimal AmountReceived, string? Notes);
-
+public record PaymentCreateRequest(int CarrierId, DateOnly PeriodStart, DateOnly PeriodEnd, DateOnly ScheduledDate, decimal AmountReceived, string? Notes);
 public record PaymentListItemResponse(
-    int TransportadoraId,
-    string TransportadoraNome,
-    DateOnly PeriodStart,
-    DateOnly PeriodEnd,
-    DateOnly ScheduledDate,
-    decimal GanhosBrutos,
-    decimal DescontosPnr,
-    decimal AmountDue,
-    decimal? AmountReceived,
-    DateTime? ReceivedAt,
-    bool Paid
-);
-
-public record RotaResponse(
-    int Id,
-    int TransportadoraId,
-    string TransportadoraNome,
-    DateOnly DataRota,
-    decimal? ValorFixo,
-    decimal? ValorPorPacote,
-    int QuantidadePacotes,
-    decimal ValorTotalCalculado,
-    decimal TotalDescontosPnr,
-    decimal ValorLiquido,
-    DateTime CreatedAt
-);
-
-public record PnrResponse(
-    int Id,
-    int RotaId,
-    string TransportadoraNome,
-    DateOnly DataRota,
-    DateOnly DataPnr,
-    decimal ValorDesconto,
-    string? Observacao,
-    DateTime CreatedAt
+    int CarrierId, string CarrierName,
+    DateOnly PeriodStart, DateOnly PeriodEnd, DateOnly ScheduledDate,
+    decimal GrossEarnings, decimal TotalDiscounts, decimal AmountDue,
+    decimal? AmountReceived, DateTime? ReceivedAt, bool Paid
 );
 
 public record DashboardSummaryResponse(
-    DateOnly StartDate,
-    DateOnly EndDate,
-    int TotalRotas,
-    int TotalPacotes,
-    int DiasTrabalhos,
-    decimal GanhosBrutos,
-    decimal DescontosPnr,
-    decimal GanhosLiquidos
+    DateOnly StartDate, DateOnly EndDate,
+    int TotalRoutes, int TotalPackages, int WorkingDays,
+    decimal GrossEarnings, decimal TotalDiscounts, decimal NetEarnings,
+    decimal TotalFuel, decimal RealEarnings
 );
 
-public record DashboardPrevisaoItemResponse(
-    DateOnly DataRota,
-    int TransportadoraId,
-    string TransportadoraNome,
-    int TotalRotas,
-    decimal GanhosBrutos,
-    decimal DescontosPnr,
-    decimal GanhosLiquidos
+public record DashboardForecastItemResponse(
+    DateOnly RouteDate, int CarrierId, string CarrierName,
+    int TotalRoutes, decimal GrossEarnings, decimal TotalDiscounts, decimal NetEarnings
 );
 
-public record DashboardHistoricoItemResponse(
-    DateOnly Data,
-    int TotalRotas,
-    decimal GanhosBrutos,
-    decimal DescontosPnr,
-    decimal GanhosLiquidos
+public record DashboardHistoryItemResponse(
+    DateOnly Date, int TotalRoutes,
+    decimal GrossEarnings, decimal TotalDiscounts, decimal NetEarnings
 );
