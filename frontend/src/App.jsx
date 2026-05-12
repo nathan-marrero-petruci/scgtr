@@ -177,7 +177,7 @@ export default function App() {
 
   const tabTitles = {
     agenda:    'Próximos Recebimentos',
-    registrar: 'Registrar Rota',
+    registrar: 'Registrar',
     historico: 'Histórico',
     config:    'Configurações',
   }
@@ -434,6 +434,28 @@ function AgendaTab({ carriers, onError }) {
 // ─── Registrar Tab ───────────────────────────────────────────────────────────
 
 function RegistrarTab({ activeCarriers, onError }) {
+  const [type, setType] = useState('route')
+
+  return (
+    <div>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+        <button
+          className={`filter-chip${type === 'route' ? ' active' : ''}`}
+          onClick={() => setType('route')}
+        >Rota</button>
+        <button
+          className={`filter-chip${type === 'fuel' ? ' active' : ''}`}
+          onClick={() => setType('fuel')}
+        >Combustível</button>
+      </div>
+
+      {type === 'route' && <RouteForm activeCarriers={activeCarriers} onError={onError} />}
+      {type === 'fuel' && <FuelForm onError={onError} />}
+    </div>
+  )
+}
+
+function RouteForm({ activeCarriers, onError }) {
   const lastCarrierId = localStorage.getItem('lastCarrierId') || ''
   const [form, setForm] = useState({
     carrierId: lastCarrierId,
@@ -441,6 +463,7 @@ function RegistrarTab({ activeCarriers, onError }) {
     fixedAmount: '',
     amountPerPackage: '',
     packageCount: '',
+    notes: '',
   })
   const [saving, setSaving] = useState(false)
   const [success, setSuccess] = useState(false)
@@ -460,6 +483,7 @@ function RegistrarTab({ activeCarriers, onError }) {
           fixedAmount: form.fixedAmount === '' ? null : Number(form.fixedAmount),
           amountPerPackage: form.amountPerPackage === '' ? null : Number(form.amountPerPackage),
           packageCount: Number(form.packageCount || 0),
+          notes: form.notes || null,
         }),
       })
       localStorage.setItem('lastCarrierId', form.carrierId)
@@ -469,6 +493,7 @@ function RegistrarTab({ activeCarriers, onError }) {
         fixedAmount: '',
         amountPerPackage: '',
         packageCount: '',
+        notes: '',
       }))
       setSuccess(true)
       setTimeout(() => setSuccess(false), 3000)
@@ -582,10 +607,166 @@ function RegistrarTab({ activeCarriers, onError }) {
               <strong style={{ fontSize: 18 }}>{previewTotal}</strong>
             </div>
           )}
+
+          <hr className="divider" />
+
+          <div className="form-group">
+            <label>
+              Observação (opcional)
+              <input
+                type="text"
+                value={form.notes}
+                onChange={e => set('notes', e.target.value)}
+                placeholder="Ex: Ambulancia, ajudei um cara a terminar a rota, etc ..."
+                maxLength={300}
+              />
+            </label>
+          </div>
         </div>
 
         <button type="submit" className="btn-full" disabled={saving}>
           {saving ? 'Salvando...' : 'Cadastrar Rota'}
+        </button>
+      </form>
+    </div>
+  )
+}
+
+function FuelForm({ onError }) {
+  const [form, setForm] = useState({
+    entryDate: todayStr(),
+    fuelType: 'gasoline',
+    liters: '',
+    totalCost: '',
+    notes: '',
+  })
+  const [saving, setSaving] = useState(false)
+  const [success, setSuccess] = useState(false)
+
+  const set = (key, value) => setForm(prev => ({ ...prev, [key]: value }))
+
+  const handleSubmit = async (e) => {
+    e.preventDefault()
+    setSaving(true)
+    setSuccess(false)
+    try {
+      await request('/fuel-entries', {
+        method: 'POST',
+        body: JSON.stringify({
+          entryDate: form.entryDate,
+          fuelType: form.fuelType,
+          liters: form.liters === '' ? null : Number(form.liters),
+          totalCost: Number(form.totalCost),
+          notes: form.notes || null,
+        }),
+      })
+      setForm({ entryDate: todayStr(), fuelType: 'gasoline', liters: '', totalCost: '', notes: '' })
+      setSuccess(true)
+      setTimeout(() => setSuccess(false), 3000)
+    } catch (err) {
+      onError(err.message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const pricePerLiter = form.liters && form.totalCost
+    ? (Number(form.totalCost) / Number(form.liters)).toFixed(3)
+    : null
+
+  return (
+    <div>
+      {success && <div className="success-msg">Abastecimento registrado com sucesso!</div>}
+
+      <form onSubmit={handleSubmit}>
+        <div className="card">
+          <div className="form-group">
+            <label>
+              Data do abastecimento
+              <input
+                type="date"
+                value={form.entryDate}
+                onChange={e => set('entryDate', e.target.value)}
+                required
+              />
+            </label>
+          </div>
+
+          <div className="form-group">
+            <label>
+              Tipo de combustível
+              <select value={form.fuelType} onChange={e => set('fuelType', e.target.value)}>
+                <option value="gasoline">Gasolina</option>
+                <option value="ethanol">Etanol</option>
+              </select>
+            </label>
+          </div>
+
+          <hr className="divider" />
+
+          <div className="form-row">
+            <div className="form-group">
+              <label>
+                Litros (opcional)
+                <input
+                  type="number"
+                  step="0.001"
+                  min="0.001"
+                  placeholder="0,000"
+                  value={form.liters}
+                  onChange={e => set('liters', e.target.value)}
+                />
+              </label>
+            </div>
+            <div className="form-group">
+              <label>
+                Valor total (R$)
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0.01"
+                  placeholder="0,00"
+                  value={form.totalCost}
+                  onChange={e => set('totalCost', e.target.value)}
+                  required
+                />
+              </label>
+            </div>
+          </div>
+
+          {pricePerLiter && (
+            <div style={{
+              background: 'var(--bg-secondary)',
+              borderRadius: 8,
+              padding: '10px 14px',
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              marginTop: 4,
+            }}>
+              <span style={{ fontSize: 14, color: 'var(--text-secondary)' }}>Preço/litro</span>
+              <strong style={{ fontSize: 18 }}>R$ {pricePerLiter}</strong>
+            </div>
+          )}
+
+          <hr className="divider" />
+
+          <div className="form-group">
+            <label>
+              Observação (opcional)
+              <input
+                type="text"
+                value={form.notes}
+                onChange={e => set('notes', e.target.value)}
+                placeholder="Ex: Peguei promoção de combustível no posto X"
+                maxLength={300}
+              />
+            </label>
+          </div>
+        </div>
+
+        <button type="submit" className="btn-full" disabled={saving}>
+          {saving ? 'Salvando...' : 'Registrar Combustível'}
         </button>
       </form>
     </div>
@@ -597,6 +778,7 @@ function RegistrarTab({ activeCarriers, onError }) {
 function HistoricoTab({ activeCarriers, onError }) {
   const [routes, setRoutes] = useState([])
   const [discounts, setDiscounts] = useState([])
+  const [fuelEntries, setFuelEntries] = useState([])
   const [summary, setSummary] = useState(null)
   const [history, setHistory] = useState([])
 
@@ -612,15 +794,17 @@ function HistoricoTab({ activeCarriers, onError }) {
     setLoading(true)
     try {
       const cParam = cId ? `&carrierId=${cId}` : ''
-      const [routesData, summaryData, historyData, discountsData] = await Promise.all([
+      const [routesData, summaryData, historyData, discountsData, fuelData] = await Promise.all([
         request(`/routes?startDate=${start}&endDate=${end}${cParam}`),
         request(`/dashboard/summary?startDate=${start}&endDate=${end}${cParam}`),
         request(`/dashboard/history?startDate=${start}&endDate=${end}${cParam}`),
         request(`/discounts?startDate=${start}&endDate=${end}`),
+        request(`/fuel-entries?startDate=${start}&endDate=${end}`),
       ])
       setRoutes(routesData)
       setSummary(summaryData)
       setHistory(historyData)
+      setFuelEntries(fuelData)
       if (cId) {
         const cName = activeCarriers.find(c => String(c.id) === String(cId))?.name
         setDiscounts(cName ? discountsData.filter(d => d.carrierName === cName) : discountsData)
@@ -637,6 +821,15 @@ function HistoricoTab({ activeCarriers, onError }) {
   const handleDeleteDiscount = async (id) => {
     try {
       await request(`/discounts/${id}`, { method: 'DELETE' })
+      load(startDate, endDate, selectedCarrier)
+    } catch (err) {
+      onError(err.message)
+    }
+  }
+
+  const handleDeleteFuelEntry = async (id) => {
+    try {
+      await request(`/fuel-entries/${id}`, { method: 'DELETE' })
       load(startDate, endDate, selectedCarrier)
     } catch (err) {
       onError(err.message)
@@ -720,6 +913,8 @@ function HistoricoTab({ activeCarriers, onError }) {
             <div className="metric-card"><span>Bruto</span><strong>{fmt(summary.grossEarnings)}</strong></div>
             <div className="metric-card"><span>Descontos</span><strong>{fmt(summary.totalDiscounts)}</strong></div>
             <div className="metric-card"><span>Líquido</span><strong>{fmt(summary.netEarnings)}</strong></div>
+            <div className="metric-card"><span>Combustível</span><strong style={{ color: 'var(--color-danger, #ef4444)' }}>-{fmt(summary.totalFuel)}</strong></div>
+            <div className="metric-card" style={{ gridColumn: 'span 2' }}><span>Ganho Real</span><strong style={{ fontSize: '1.1em' }}>{fmt(summary.realEarnings)}</strong></div>
           </div>
 
           {showChart && history.length > 0 && (
@@ -745,6 +940,7 @@ function HistoricoTab({ activeCarriers, onError }) {
                     {fmtDate(r.routeDate)}
                     {r.packageCount > 0 ? ` • ${r.packageCount} pct` : ''}
                     {r.totalDiscounts > 0 ? ` • PNR ${fmt(r.totalDiscounts)}` : ''}
+                    {r.notes ? ` • ${r.notes}` : ''}
                   </div>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -777,6 +973,31 @@ function HistoricoTab({ activeCarriers, onError }) {
               ))}
             </div>
           )}
+
+          {fuelEntries.length > 0 && (
+            <div className="card">
+              <p className="card-title">Combustível</p>
+              {fuelEntries.map(f => (
+                <div key={f.id} className="route-item">
+                  <div className="route-item-left">
+                    <div className="route-item-name">{f.fuelType === 'gasoline' ? 'Gasolina' : 'Etanol'}</div>
+                    <div className="route-item-meta">
+                      {fmtDate(f.entryDate)}
+                      {f.liters ? ` • ${f.liters}L` : ''}
+                      {f.liters && f.totalCost ? ` • R$ ${(f.totalCost / f.liters).toFixed(3)}/L` : ''}
+                      {f.notes ? ` • ${f.notes}` : ''}
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <div className="route-item-amount" style={{ color: 'var(--color-danger, #ef4444)' }}>
+                      -{fmt(f.totalCost)}
+                    </div>
+                    <button className="btn-ghost btn-small" onClick={() => handleDeleteFuelEntry(f.id)} title="Remover">✕</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </>
       )}
 
@@ -800,6 +1021,7 @@ function EditRouteModal({ route, activeCarriers, onClose, onSaved, onError }) {
     fixedAmount: route.fixedAmount != null ? String(route.fixedAmount) : '',
     amountPerPackage: route.amountPerPackage != null ? String(route.amountPerPackage) : '',
     packageCount: route.packageCount > 0 ? String(route.packageCount) : '',
+    notes: route.notes || '',
   })
   const [saving, setSaving] = useState(false)
   const set = (k, v) => setForm(p => ({ ...p, [k]: v }))
@@ -824,6 +1046,7 @@ function EditRouteModal({ route, activeCarriers, onClose, onSaved, onError }) {
           fixedAmount: form.fixedAmount === '' ? null : Number(form.fixedAmount),
           amountPerPackage: form.amountPerPackage === '' ? null : Number(form.amountPerPackage),
           packageCount: Number(form.packageCount || 0),
+          notes: form.notes || null,
         }),
       })
       onSaved()
@@ -885,6 +1108,18 @@ function EditRouteModal({ route, activeCarriers, onClose, onSaved, onError }) {
               <strong>{previewTotal}</strong>
             </div>
           )}
+          <div className="form-group" style={{ marginBottom: 14 }}>
+            <label>
+              Observação (opcional)
+              <input
+                type="text"
+                value={form.notes}
+                onChange={e => set('notes', e.target.value)}
+                placeholder="Ex: rota especial, entrega difícil..."
+                maxLength={300}
+              />
+            </label>
+          </div>
           <div style={{ display: 'flex', gap: 8 }}>
             <button type="submit" className="btn-full" disabled={saving}>{saving ? 'Salvando...' : 'Salvar alterações'}</button>
           </div>

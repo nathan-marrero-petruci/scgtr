@@ -251,6 +251,7 @@ app.MapGet("/api/routes", async (AppDbContext db, DateOnly? startDate = null, Da
             x.TotalAmount,
             x.Discounts.Sum(d => d.DiscountAmount),
             x.TotalAmount - x.Discounts.Sum(d => d.DiscountAmount),
+            x.Notes,
             x.CreatedAt
         ))
         .ToListAsync();
@@ -276,6 +277,7 @@ app.MapPost("/api/routes", async (AppDbContext db, RouteCreateRequest request) =
         AmountPerPackage = request.AmountPerPackage,
         PackageCount = request.PackageCount,
         TotalAmount = CalculateTotalAmount(request.FixedAmount, request.AmountPerPackage, request.PackageCount),
+        Notes = string.IsNullOrWhiteSpace(request.Notes) ? null : request.Notes.Trim(),
         CreatedAt = DateTime.UtcNow
     };
 
@@ -305,6 +307,7 @@ app.MapPut("/api/routes/{id:int}", async (AppDbContext db, int id, RouteCreateRe
     route.AmountPerPackage = request.AmountPerPackage;
     route.PackageCount = request.PackageCount;
     route.TotalAmount = CalculateTotalAmount(request.FixedAmount, request.AmountPerPackage, request.PackageCount);
+    route.Notes = string.IsNullOrWhiteSpace(request.Notes) ? null : request.Notes.Trim();
     await db.SaveChangesAsync();
 
     return Results.Ok(route);
@@ -566,10 +569,16 @@ app.MapGet("/api/dashboard/summary", async (AppDbContext db, DateOnly? startDate
     var totalDiscounts = routes.SelectMany(x => x.Discounts).Sum(x => x.DiscountAmount);
     var totalPackages = routes.Sum(x => x.PackageCount);
     var workingDays = routes.Select(x => x.RouteDate).Distinct().Count();
+    var netEarnings = grossEarnings - totalDiscounts;
+
+    var totalFuel = await db.FuelEntries
+        .Where(x => x.EntryDate >= inicio && x.EntryDate <= fim)
+        .SumAsync(x => x.TotalCost);
 
     return Results.Ok(new DashboardSummaryResponse(
         inicio, fim, routes.Count, totalPackages, workingDays,
-        grossEarnings, totalDiscounts, grossEarnings - totalDiscounts
+        grossEarnings, totalDiscounts, netEarnings,
+        totalFuel, netEarnings - totalFuel
     ));
 });
 
@@ -640,6 +649,64 @@ app.MapGet("/api/dashboard/history", async (AppDbContext db, DateOnly? startDate
     return Results.Ok(history);
 });
 
+// ── Fuel Entries ─────────────────────────────────────────────────────────────
+
+app.MapGet("/api/fuel-entries", async (AppDbContext db, DateOnly? startDate = null, DateOnly? endDate = null) =>
+{
+    var query = db.FuelEntries.AsQueryable();
+
+    if (startDate.HasValue)
+        query = query.Where(x => x.EntryDate >= startDate.Value);
+    if (endDate.HasValue)
+        query = query.Where(x => x.EntryDate <= endDate.Value);
+
+    var entries = await query
+        .OrderByDescending(x => x.EntryDate)
+        .ThenByDescending(x => x.CreatedAt)
+        .Select(x => new FuelEntryResponse(x.Id, x.EntryDate, x.FuelType, x.Liters, x.TotalCost, x.Notes, x.CreatedAt))
+        .ToListAsync();
+
+    return Results.Ok(entries);
+});
+
+app.MapPost("/api/fuel-entries", async (AppDbContext db, FuelEntryCreateRequest request) =>
+{
+    if (string.IsNullOrWhiteSpace(request.FuelType) || (request.FuelType != "gasoline" && request.FuelType != "ethanol"))
+        return Results.BadRequest("Invalid fuel type. Use 'gasoline' or 'ethanol'.");
+
+    if (request.TotalCost <= 0)
+        return Results.BadRequest("Total cost must be greater than zero.");
+
+    if (request.Liters.HasValue && request.Liters.Value <= 0)
+        return Results.BadRequest("Liters must be greater than zero.");
+
+    var entry = new FuelEntry
+    {
+        EntryDate = request.EntryDate,
+        FuelType = request.FuelType,
+        Liters = request.Liters,
+        TotalCost = request.TotalCost,
+        Notes = string.IsNullOrWhiteSpace(request.Notes) ? null : request.Notes.Trim(),
+        CreatedAt = DateTime.UtcNow
+    };
+
+    db.FuelEntries.Add(entry);
+    await db.SaveChangesAsync();
+
+    return Results.Created($"/api/fuel-entries/{entry.Id}", entry);
+});
+
+app.MapDelete("/api/fuel-entries/{id:int}", async (AppDbContext db, int id) =>
+{
+    var entry = await db.FuelEntries.FindAsync(id);
+    if (entry is null)
+        return Results.NotFound();
+
+    db.FuelEntries.Remove(entry);
+    await db.SaveChangesAsync();
+    return Results.NoContent();
+});
+
 app.MapPost("/api/clear-test-data", async (AppDbContext db) =>
 {
     db.PaymentSchedules.RemoveRange(db.PaymentSchedules);
@@ -647,6 +714,7 @@ app.MapPost("/api/clear-test-data", async (AppDbContext db) =>
     db.Carriers.RemoveRange(db.Carriers);
     db.Routes.RemoveRange(db.Routes);
     db.Discounts.RemoveRange(db.Discounts);
+    db.FuelEntries.RemoveRange(db.FuelEntries);
     await db.SaveChangesAsync();
     return Results.Ok("Test data cleared.");
 });
@@ -684,6 +752,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
     public DbSet<Discount> Discounts => Set<Discount>();
     public DbSet<PaymentSchedule> PaymentSchedules => Set<PaymentSchedule>();
     public DbSet<Payment> Payments => Set<Payment>();
+    public DbSet<FuelEntry> FuelEntries => Set<FuelEntry>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -691,6 +760,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
         modelBuilder.Entity<DeliveryRoute>().Property(x => x.TotalAmount).HasColumnType("decimal(18,2)");
         modelBuilder.Entity<DeliveryRoute>().Property(x => x.FixedAmount).HasColumnType("decimal(18,2)");
         modelBuilder.Entity<DeliveryRoute>().Property(x => x.AmountPerPackage).HasColumnType("decimal(18,2)");
+        modelBuilder.Entity<DeliveryRoute>().Property(x => x.Notes).HasMaxLength(300);
         modelBuilder.Entity<Discount>().Property(x => x.DiscountAmount).HasColumnType("decimal(18,2)");
         modelBuilder.Entity<Discount>().Property(x => x.Notes).HasMaxLength(300);
         modelBuilder.Entity<PaymentSchedule>().Property(x => x.Frequency).HasMaxLength(20).IsRequired();
@@ -698,6 +768,10 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
         modelBuilder.Entity<PaymentSchedule>().Property(x => x.DayOfMonth);
         modelBuilder.Entity<Payment>().Property(x => x.AmountReceived).HasColumnType("decimal(18,2)");
         modelBuilder.Entity<Payment>().Property(x => x.Notes).HasMaxLength(300);
+        modelBuilder.Entity<FuelEntry>().Property(x => x.TotalCost).HasColumnType("decimal(18,2)");
+        modelBuilder.Entity<FuelEntry>().Property(x => x.Liters).HasColumnType("decimal(18,3)");
+        modelBuilder.Entity<FuelEntry>().Property(x => x.FuelType).HasMaxLength(20).IsRequired();
+        modelBuilder.Entity<FuelEntry>().Property(x => x.Notes).HasMaxLength(300);
     }
 }
 
@@ -723,8 +797,20 @@ public class DeliveryRoute
     public decimal? AmountPerPackage { get; set; }
     public int PackageCount { get; set; }
     public decimal TotalAmount { get; set; }
+    public string? Notes { get; set; }
     public DateTime CreatedAt { get; set; }
     public List<Discount> Discounts { get; set; } = [];
+}
+
+public class FuelEntry
+{
+    public int Id { get; set; }
+    public DateOnly EntryDate { get; set; }
+    public string FuelType { get; set; } = string.Empty;
+    public decimal? Liters { get; set; }
+    public decimal TotalCost { get; set; }
+    public string? Notes { get; set; }
+    public DateTime CreatedAt { get; set; }
 }
 
 public class Discount
@@ -774,12 +860,15 @@ public record CarrierResponse(int Id, string Name, bool IsActive, PaymentSchedul
 public record CarrierCreateRequest(string Name);
 public record CarrierUpdateRequest(string Name, bool IsActive);
 
-public record RouteCreateRequest(int CarrierId, DateOnly RouteDate, decimal? FixedAmount, decimal? AmountPerPackage, int PackageCount);
+public record RouteCreateRequest(int CarrierId, DateOnly RouteDate, decimal? FixedAmount, decimal? AmountPerPackage, int PackageCount, string? Notes = null);
 public record RouteResponse(
     int Id, int CarrierId, string CarrierName, DateOnly RouteDate,
     decimal? FixedAmount, decimal? AmountPerPackage, int PackageCount,
-    decimal TotalAmount, decimal TotalDiscounts, decimal NetAmount, DateTime CreatedAt
+    decimal TotalAmount, decimal TotalDiscounts, decimal NetAmount, string? Notes, DateTime CreatedAt
 );
+
+public record FuelEntryCreateRequest(DateOnly EntryDate, string FuelType, decimal? Liters, decimal TotalCost, string? Notes = null);
+public record FuelEntryResponse(int Id, DateOnly EntryDate, string FuelType, decimal? Liters, decimal TotalCost, string? Notes, DateTime CreatedAt);
 
 public record DiscountCreateRequest(int RouteId, DateOnly DiscountDate, decimal DiscountAmount, string? Notes);
 public record DiscountResponse(
@@ -801,7 +890,8 @@ public record PaymentListItemResponse(
 public record DashboardSummaryResponse(
     DateOnly StartDate, DateOnly EndDate,
     int TotalRoutes, int TotalPackages, int WorkingDays,
-    decimal GrossEarnings, decimal TotalDiscounts, decimal NetEarnings
+    decimal GrossEarnings, decimal TotalDiscounts, decimal NetEarnings,
+    decimal TotalFuel, decimal RealEarnings
 );
 
 public record DashboardForecastItemResponse(
