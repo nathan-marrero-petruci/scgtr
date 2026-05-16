@@ -41,3 +41,7 @@
 
 # Secrets — connection strings com credenciais
 **/appsettings.Development.json
+**/appsettings.json
+
+# Dados sensíveis de migração
+supabase/migrate_data.sql
