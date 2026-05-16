@@ -1,17 +1,46 @@
 using Microsoft.EntityFrameworkCore;
 using System.Text.Json.Serialization;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.IdentityModel.Tokens;
+using System.Text;
+using System.Security.Claims;
+using Api.Data;
+using Api.Services;
+using Api.Models;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddOpenApi();
+builder.Services.AddControllers();
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen();
 
-var connectionString = builder.Configuration.GetConnectionString("DefaultConnection")
-    ?? throw new InvalidOperationException("Connection string 'DefaultConnection' not found.");
-builder.Services.AddDbContext<AppDbContext>(options => options.UseNpgsql(connectionString));
-builder.Services.ConfigureHttpJsonOptions(options =>
-{
-    options.SerializerOptions.ReferenceHandler = ReferenceHandler.IgnoreCycles;
-});
+var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
+builder.Services.AddDbContext<ApplicationDbContext>(options =>
+    options.UseNpgsql(connectionString));
+
+    var jwtKey = builder.Configuration["Jwt:Key"]
+        ?? throw new InvalidOperationException("Jwt:Key is not configured in appsettings.");
+builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddJwtBearer(options =>
+    {
+        options.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidateIssuer = true,
+            ValidateAudience = true,
+            ValidateLifetime = true,
+            ValidateIssuerSigningKey = true,
+            ValidIssuer = builder.Configuration["Jwt:Issuer"],
+            ValidAudience = builder.Configuration["Jwt:Audience"],
+            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtKey))
+        };
+    });
+
+    builder.Services.AddScoped<AuthService>();
+    builder.Services.AddScoped<GanhoService>();
+
+    builder.Services.AddDbContext<AppDbContext>(options => options.UseNpgsql(connectionString));
+
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("frontend", policy =>
@@ -26,6 +55,8 @@ builder.Services.AddCors(options =>
                     return false;
                 if (uri.Host.Equals("localhost", StringComparison.OrdinalIgnoreCase))
                     return true;
+                if (uri.Host.Equals("127.0.0.1", StringComparison.OrdinalIgnoreCase))
+                    return true;
                 if (System.Net.IPAddress.TryParse(uri.Host, out var ip))
                 {
                     var bytes = ip.GetAddressBytes();
@@ -38,7 +69,8 @@ builder.Services.AddCors(options =>
                     || uri.Host.EndsWith(".up.railway.app", StringComparison.OrdinalIgnoreCase);
             })
             .AllowAnyHeader()
-            .AllowAnyMethod();
+            .AllowAnyMethod()
+            .AllowCredentials();
     });
 });
 
@@ -51,15 +83,24 @@ using (var scope = app.Services.CreateScope())
 }
 
 if (app.Environment.IsDevelopment())
+{
+    app.UseSwagger();
+    app.UseSwaggerUI();
+}
     app.MapOpenApi();
+    app.UseHttpsRedirection();
+    app.UseAuthentication();
+    app.UseAuthorization();
+    app.MapControllers();
 
 app.UseCors("frontend");
 
 // ── Carriers ──────────────────────────────────────────────────────────────────
 
-app.MapGet("/api/carriers", async (AppDbContext db, bool includeInactive = false) =>
+app.MapGet("/api/carriers", async (AppDbContext db, HttpContext ctx, bool includeInactive = false) =>
 {
-    var query = db.Carriers.AsQueryable();
+    var userId = GetUserId(ctx);
+    var query = db.Carriers.Where(x => x.UserId == userId).AsQueryable();
     if (!includeInactive)
         query = query.Where(x => x.IsActive);
 
@@ -79,15 +120,17 @@ app.MapGet("/api/carriers", async (AppDbContext db, bool includeInactive = false
     )).ToList();
 
     return Results.Ok(result);
-});
+}).RequireAuthorization();
 
-app.MapPost("/api/carriers", async (AppDbContext db, CarrierCreateRequest request) =>
+app.MapPost("/api/carriers", async (AppDbContext db, HttpContext ctx, CarrierCreateRequest request) =>
 {
+    var userId = GetUserId(ctx);
+
     if (string.IsNullOrWhiteSpace(request.Name))
         return Results.BadRequest("Name is required.");
 
     var nameTrimmed = request.Name.Trim();
-    var duplicate = await db.Carriers.AnyAsync(c => c.Name.ToLower() == nameTrimmed.ToLower());
+    var duplicate = await db.Carriers.AnyAsync(c => c.UserId == userId && c.Name.ToLower() == nameTrimmed.ToLower());
     if (duplicate)
         return Results.Conflict("A carrier with this name already exists.");
 
@@ -95,6 +138,7 @@ app.MapPost("/api/carriers", async (AppDbContext db, CarrierCreateRequest reques
     {
         Name = nameTrimmed,
         IsActive = true,
+        UserId = userId,
         CreatedAt = DateTime.UtcNow
     };
 
@@ -102,19 +146,20 @@ app.MapPost("/api/carriers", async (AppDbContext db, CarrierCreateRequest reques
     await db.SaveChangesAsync();
 
     return Results.Created($"/api/carriers/{carrier.Id}", carrier);
-});
+}).RequireAuthorization();
 
-app.MapPut("/api/carriers/{id:int}", async (AppDbContext db, int id, CarrierUpdateRequest request) =>
+app.MapPut("/api/carriers/{id:int}", async (AppDbContext db, HttpContext ctx, int id, CarrierUpdateRequest request) =>
 {
+    var userId = GetUserId(ctx);
     var carrier = await db.Carriers.FindAsync(id);
-    if (carrier is null)
+    if (carrier is null || carrier.UserId != userId)
         return Results.NotFound();
 
     if (string.IsNullOrWhiteSpace(request.Name))
         return Results.BadRequest("Name is required.");
 
     var nameTrimmed = request.Name.Trim();
-    var duplicate = await db.Carriers.AnyAsync(c => c.Id != id && c.Name.ToLower() == nameTrimmed.ToLower());
+    var duplicate = await db.Carriers.AnyAsync(c => c.Id != id && c.UserId == userId && c.Name.ToLower() == nameTrimmed.ToLower());
     if (duplicate)
         return Results.Conflict("A carrier with this name already exists.");
 
@@ -123,13 +168,14 @@ app.MapPut("/api/carriers/{id:int}", async (AppDbContext db, int id, CarrierUpda
     await db.SaveChangesAsync();
 
     return Results.Ok(carrier);
-});
+}).RequireAuthorization();
 
-app.MapDelete("/api/carriers/{id:int}", async (AppDbContext db, int id) =>
+app.MapDelete("/api/carriers/{id:int}", async (AppDbContext db, HttpContext ctx, int id) =>
 {
+    var userId = GetUserId(ctx);
     var carrier = await db.Carriers
         .Include(c => c.Routes)
-        .FirstOrDefaultAsync(c => c.Id == id);
+        .FirstOrDefaultAsync(c => c.Id == id && c.UserId == userId);
 
     if (carrier is null) return Results.Problem("Carrier not found.", statusCode: 404);
 
@@ -145,45 +191,53 @@ app.MapDelete("/api/carriers/{id:int}", async (AppDbContext db, int id) =>
     db.Carriers.Remove(carrier);
     await db.SaveChangesAsync();
     return Results.NoContent();
-});
+}).RequireAuthorization();
 
-app.MapPatch("/api/carriers/{id:int}/deactivate", async (AppDbContext db, int id) =>
+app.MapPatch("/api/carriers/{id:int}/deactivate", async (AppDbContext db, HttpContext ctx, int id) =>
 {
+    var userId = GetUserId(ctx);
     var carrier = await db.Carriers.FindAsync(id);
-    if (carrier is null)
+    if (carrier is null || carrier.UserId != userId)
         return Results.NotFound();
 
     carrier.IsActive = false;
     await db.SaveChangesAsync();
     return Results.Ok(carrier);
-});
+}).RequireAuthorization();
 
-app.MapPatch("/api/carriers/{id:int}/reactivate", async (AppDbContext db, int id) =>
+app.MapPatch("/api/carriers/{id:int}/reactivate", async (AppDbContext db, HttpContext ctx, int id) =>
 {
+    var userId = GetUserId(ctx);
     var carrier = await db.Carriers.FindAsync(id);
-    if (carrier is null)
+    if (carrier is null || carrier.UserId != userId)
         return Results.NotFound();
 
     carrier.IsActive = true;
     await db.SaveChangesAsync();
     return Results.Ok(carrier);
-});
+}).RequireAuthorization();
 
 // ── Payment Schedules ─────────────────────────────────────────────────────────
 
-app.MapGet("/api/carriers/{id:int}/payment-schedule", async (AppDbContext db, int id) =>
+app.MapGet("/api/carriers/{id:int}/payment-schedule", async (AppDbContext db, HttpContext ctx, int id) =>
 {
+    var userId = GetUserId(ctx);
+    var carrier = await db.Carriers.FindAsync(id);
+    if (carrier is null || carrier.UserId != userId)
+        return Results.NotFound();
+
     var schedule = await db.PaymentSchedules.FirstOrDefaultAsync(x => x.CarrierId == id);
     if (schedule is null)
         return Results.NotFound();
 
     return Results.Ok(new PaymentScheduleResponse(schedule.Frequency, schedule.Weekday, schedule.DayOfMonth, schedule.WeekStartDay));
-});
+}).RequireAuthorization();
 
-app.MapPut("/api/carriers/{id:int}/payment-schedule", async (AppDbContext db, int id, PaymentScheduleRequest request) =>
+app.MapPut("/api/carriers/{id:int}/payment-schedule", async (AppDbContext db, HttpContext ctx, int id, PaymentScheduleRequest request) =>
 {
+    var userId = GetUserId(ctx);
     var carrier = await db.Carriers.FindAsync(id);
-    if (carrier is null)
+    if (carrier is null || carrier.UserId != userId)
         return Results.NotFound();
 
     if (request.Frequency is null || (request.Frequency != "weekly" && request.Frequency != "quinzena"))
@@ -219,15 +273,17 @@ app.MapPut("/api/carriers/{id:int}/payment-schedule", async (AppDbContext db, in
 
     await db.SaveChangesAsync();
     return Results.Ok(new PaymentScheduleResponse(schedule.Frequency, schedule.Weekday, schedule.DayOfMonth, schedule.WeekStartDay));
-});
+}).RequireAuthorization();
 
 // ── Routes ────────────────────────────────────────────────────────────────────
 
-app.MapGet("/api/routes", async (AppDbContext db, DateOnly? startDate = null, DateOnly? endDate = null, int? carrierId = null) =>
+app.MapGet("/api/routes", async (AppDbContext db, HttpContext ctx, DateOnly? startDate = null, DateOnly? endDate = null, int? carrierId = null) =>
 {
+    var userId = GetUserId(ctx);
     var query = db.Routes
         .Include(x => x.Carrier)
         .Include(x => x.Discounts)
+        .Where(x => x.Carrier.UserId == userId)
         .AsQueryable();
 
     if (startDate.HasValue)
@@ -257,12 +313,13 @@ app.MapGet("/api/routes", async (AppDbContext db, DateOnly? startDate = null, Da
         .ToListAsync();
 
     return Results.Ok(routes);
-});
+}).RequireAuthorization();
 
-app.MapPost("/api/routes", async (AppDbContext db, RouteCreateRequest request) =>
+app.MapPost("/api/routes", async (AppDbContext db, HttpContext ctx, RouteCreateRequest request) =>
 {
+    var userId = GetUserId(ctx);
     var carrier = await db.Carriers.FindAsync(request.CarrierId);
-    if (carrier is null || !carrier.IsActive)
+    if (carrier is null || !carrier.IsActive || carrier.UserId != userId)
         return Results.BadRequest("Invalid or inactive carrier.");
 
     var validation = ValidateRouteFinancials(request.FixedAmount, request.AmountPerPackage, request.PackageCount);
@@ -285,16 +342,17 @@ app.MapPost("/api/routes", async (AppDbContext db, RouteCreateRequest request) =
     await db.SaveChangesAsync();
 
     return Results.Created($"/api/routes/{route.Id}", route);
-});
+}).RequireAuthorization();
 
-app.MapPut("/api/routes/{id:int}", async (AppDbContext db, int id, RouteCreateRequest request) =>
+app.MapPut("/api/routes/{id:int}", async (AppDbContext db, HttpContext ctx, int id, RouteCreateRequest request) =>
 {
-    var route = await db.Routes.FindAsync(id);
-    if (route is null)
+    var userId = GetUserId(ctx);
+    var route = await db.Routes.Include(r => r.Carrier).FirstOrDefaultAsync(r => r.Id == id);
+    if (route is null || route.Carrier.UserId != userId)
         return Results.NotFound();
 
     var carrier = await db.Carriers.FindAsync(request.CarrierId);
-    if (carrier is null || !carrier.IsActive)
+    if (carrier is null || !carrier.IsActive || carrier.UserId != userId)
         return Results.BadRequest("Invalid or inactive carrier.");
 
     var validation = ValidateRouteFinancials(request.FixedAmount, request.AmountPerPackage, request.PackageCount);
@@ -311,15 +369,17 @@ app.MapPut("/api/routes/{id:int}", async (AppDbContext db, int id, RouteCreateRe
     await db.SaveChangesAsync();
 
     return Results.Ok(route);
-});
+}).RequireAuthorization();
 
 // ── Discounts ─────────────────────────────────────────────────────────────────
 
-app.MapGet("/api/discounts", async (AppDbContext db, int? routeId = null, DateOnly? startDate = null, DateOnly? endDate = null) =>
+app.MapGet("/api/discounts", async (AppDbContext db, HttpContext ctx, int? routeId = null, DateOnly? startDate = null, DateOnly? endDate = null) =>
 {
+    var userId = GetUserId(ctx);
     var query = db.Discounts
         .Include(x => x.Route)
         .ThenInclude(r => r.Carrier)
+        .Where(x => x.Route.Carrier.UserId == userId)
         .AsQueryable();
 
     if (routeId.HasValue)
@@ -345,12 +405,13 @@ app.MapGet("/api/discounts", async (AppDbContext db, int? routeId = null, DateOn
         .ToListAsync();
 
     return Results.Ok(discounts);
-});
+}).RequireAuthorization();
 
-app.MapPost("/api/discounts", async (AppDbContext db, DiscountCreateRequest request) =>
+app.MapPost("/api/discounts", async (AppDbContext db, HttpContext ctx, DiscountCreateRequest request) =>
 {
-    var route = await db.Routes.FindAsync(request.RouteId);
-    if (route is null)
+    var userId = GetUserId(ctx);
+    var route = await db.Routes.Include(r => r.Carrier).FirstOrDefaultAsync(r => r.Id == request.RouteId);
+    if (route is null || route.Carrier.UserId != userId)
         return Results.BadRequest("Route not found.");
 
     if (request.DiscountAmount <= 0)
@@ -369,30 +430,36 @@ app.MapPost("/api/discounts", async (AppDbContext db, DiscountCreateRequest requ
     await db.SaveChangesAsync();
 
     return Results.Created($"/api/discounts/{discount.Id}", discount);
-});
+}).RequireAuthorization();
 
-app.MapDelete("/api/discounts/{id:int}", async (AppDbContext db, int id) =>
+app.MapDelete("/api/discounts/{id:int}", async (AppDbContext db, HttpContext ctx, int id) =>
 {
-    var discount = await db.Discounts.FindAsync(id);
-    if (discount is null)
+    var userId = GetUserId(ctx);
+    var discount = await db.Discounts
+        .Include(d => d.Route)
+        .ThenInclude(r => r.Carrier)
+        .FirstOrDefaultAsync(d => d.Id == id);
+
+    if (discount is null || discount.Route.Carrier.UserId != userId)
         return Results.NotFound();
 
     db.Discounts.Remove(discount);
     await db.SaveChangesAsync();
     return Results.NoContent();
-});
+}).RequireAuthorization();
 
 // ── Payments ──────────────────────────────────────────────────────────────────
 
-app.MapGet("/api/payments", async (AppDbContext db, DateOnly? startDate = null, DateOnly? endDate = null, int? carrierId = null, bool onlyActive = false) =>
+app.MapGet("/api/payments", async (AppDbContext db, HttpContext ctx, DateOnly? startDate = null, DateOnly? endDate = null, int? carrierId = null, bool onlyActive = false) =>
 {
+    var userId = GetUserId(ctx);
     var inicio = startDate ?? DateOnly.FromDateTime(DateTime.Today);
     var fim = endDate ?? inicio;
 
     if (inicio > fim)
         return Results.BadRequest("Invalid period.");
 
-    var carriersQuery = db.Carriers.AsQueryable();
+    var carriersQuery = db.Carriers.Where(c => c.UserId == userId).AsQueryable();
     if (carrierId.HasValue)
         carriersQuery = carriersQuery.Where(c => c.Id == carrierId.Value);
     if (onlyActive)
@@ -502,12 +569,13 @@ app.MapGet("/api/payments", async (AppDbContext db, DateOnly? startDate = null, 
     }
 
     return Results.Ok(results.OrderBy(x => x.ScheduledDate).ThenBy(x => x.CarrierName).ToList());
-});
+}).RequireAuthorization();
 
-app.MapPost("/api/payments", async (AppDbContext db, PaymentCreateRequest request) =>
+app.MapPost("/api/payments", async (AppDbContext db, HttpContext ctx, PaymentCreateRequest request) =>
 {
+    var userId = GetUserId(ctx);
     var carrier = await db.Carriers.FindAsync(request.CarrierId);
-    if (carrier is null)
+    if (carrier is null || carrier.UserId != userId)
         return Results.BadRequest("Invalid carrier.");
 
     var routesInPeriod = await db.Routes.Include(r => r.Discounts)
@@ -541,12 +609,13 @@ app.MapPost("/api/payments", async (AppDbContext db, PaymentCreateRequest reques
     await db.SaveChangesAsync();
 
     return Results.Created($"/api/payments/{payment.Id}", payment);
-});
+}).RequireAuthorization();
 
 // ── Dashboard ─────────────────────────────────────────────────────────────────
 
-app.MapGet("/api/dashboard/summary", async (AppDbContext db, DateOnly? startDate = null, DateOnly? endDate = null, int? carrierId = null, bool onlyActive = false) =>
+app.MapGet("/api/dashboard/summary", async (AppDbContext db, HttpContext ctx, DateOnly? startDate = null, DateOnly? endDate = null, int? carrierId = null, bool onlyActive = false) =>
 {
+    var userId = GetUserId(ctx);
     var inicio = startDate ?? DateOnly.FromDateTime(DateTime.Today);
     var fim = endDate ?? inicio;
 
@@ -556,7 +625,7 @@ app.MapGet("/api/dashboard/summary", async (AppDbContext db, DateOnly? startDate
     var query = db.Routes
         .Include(x => x.Discounts)
         .Include(x => x.Carrier)
-        .Where(x => x.RouteDate >= inicio && x.RouteDate <= fim);
+        .Where(x => x.RouteDate >= inicio && x.RouteDate <= fim && x.Carrier.UserId == userId);
 
     if (carrierId.HasValue)
         query = query.Where(x => x.CarrierId == carrierId.Value);
@@ -572,7 +641,7 @@ app.MapGet("/api/dashboard/summary", async (AppDbContext db, DateOnly? startDate
     var netEarnings = grossEarnings - totalDiscounts;
 
     var totalFuel = await db.FuelEntries
-        .Where(x => x.EntryDate >= inicio && x.EntryDate <= fim)
+        .Where(x => x.UserId == userId && x.EntryDate >= inicio && x.EntryDate <= fim)
         .SumAsync(x => x.TotalCost);
 
     return Results.Ok(new DashboardSummaryResponse(
@@ -580,17 +649,18 @@ app.MapGet("/api/dashboard/summary", async (AppDbContext db, DateOnly? startDate
         grossEarnings, totalDiscounts, netEarnings,
         totalFuel, netEarnings - totalFuel
     ));
-});
+}).RequireAuthorization();
 
-app.MapGet("/api/dashboard/forecast", async (AppDbContext db, DateOnly? startDate = null, DateOnly? endDate = null, int? carrierId = null, bool onlyActive = false) =>
+app.MapGet("/api/dashboard/forecast", async (AppDbContext db, HttpContext ctx, DateOnly? startDate = null, DateOnly? endDate = null, int? carrierId = null, bool onlyActive = false) =>
 {
+    var userId = GetUserId(ctx);
     var inicio = startDate ?? DateOnly.FromDateTime(DateTime.Today);
     var fim = endDate ?? inicio;
 
     var query = db.Routes
         .Include(x => x.Carrier)
         .Include(x => x.Discounts)
-        .Where(x => x.RouteDate >= inicio && x.RouteDate <= fim);
+        .Where(x => x.RouteDate >= inicio && x.RouteDate <= fim && x.Carrier.UserId == userId);
 
     if (carrierId.HasValue)
         query = query.Where(x => x.CarrierId == carrierId.Value);
@@ -615,17 +685,18 @@ app.MapGet("/api/dashboard/forecast", async (AppDbContext db, DateOnly? startDat
         .ToList();
 
     return Results.Ok(forecast);
-});
+}).RequireAuthorization();
 
-app.MapGet("/api/dashboard/history", async (AppDbContext db, DateOnly? startDate = null, DateOnly? endDate = null, int? carrierId = null, bool onlyActive = false) =>
+app.MapGet("/api/dashboard/history", async (AppDbContext db, HttpContext ctx, DateOnly? startDate = null, DateOnly? endDate = null, int? carrierId = null, bool onlyActive = false) =>
 {
+    var userId = GetUserId(ctx);
     var inicio = startDate ?? DateOnly.FromDateTime(DateTime.Today.AddDays(-30));
     var fim = endDate ?? DateOnly.FromDateTime(DateTime.Today);
 
     var query = db.Routes
         .Include(x => x.Discounts)
         .Include(x => x.Carrier)
-        .Where(x => x.RouteDate >= inicio && x.RouteDate <= fim);
+        .Where(x => x.RouteDate >= inicio && x.RouteDate <= fim && x.Carrier.UserId == userId);
 
     if (carrierId.HasValue)
         query = query.Where(x => x.CarrierId == carrierId.Value);
@@ -647,13 +718,14 @@ app.MapGet("/api/dashboard/history", async (AppDbContext db, DateOnly? startDate
         .ToList();
 
     return Results.Ok(history);
-});
+}).RequireAuthorization();
 
 // ── Fuel Entries ─────────────────────────────────────────────────────────────
 
-app.MapGet("/api/fuel-entries", async (AppDbContext db, DateOnly? startDate = null, DateOnly? endDate = null) =>
+app.MapGet("/api/fuel-entries", async (AppDbContext db, HttpContext ctx, DateOnly? startDate = null, DateOnly? endDate = null) =>
 {
-    var query = db.FuelEntries.AsQueryable();
+    var userId = GetUserId(ctx);
+    var query = db.FuelEntries.Where(x => x.UserId == userId).AsQueryable();
 
     if (startDate.HasValue)
         query = query.Where(x => x.EntryDate >= startDate.Value);
@@ -667,10 +739,12 @@ app.MapGet("/api/fuel-entries", async (AppDbContext db, DateOnly? startDate = nu
         .ToListAsync();
 
     return Results.Ok(entries);
-});
+}).RequireAuthorization();
 
-app.MapPost("/api/fuel-entries", async (AppDbContext db, FuelEntryCreateRequest request) =>
+app.MapPost("/api/fuel-entries", async (AppDbContext db, HttpContext ctx, FuelEntryCreateRequest request) =>
 {
+    var userId = GetUserId(ctx);
+
     if (string.IsNullOrWhiteSpace(request.FuelType) || (request.FuelType != "gasoline" && request.FuelType != "ethanol"))
         return Results.BadRequest("Invalid fuel type. Use 'gasoline' or 'ethanol'.");
 
@@ -682,6 +756,7 @@ app.MapPost("/api/fuel-entries", async (AppDbContext db, FuelEntryCreateRequest 
 
     var entry = new FuelEntry
     {
+        UserId = userId,
         EntryDate = request.EntryDate,
         FuelType = request.FuelType,
         Liters = request.Liters,
@@ -694,30 +769,19 @@ app.MapPost("/api/fuel-entries", async (AppDbContext db, FuelEntryCreateRequest 
     await db.SaveChangesAsync();
 
     return Results.Created($"/api/fuel-entries/{entry.Id}", entry);
-});
+}).RequireAuthorization();
 
-app.MapDelete("/api/fuel-entries/{id:int}", async (AppDbContext db, int id) =>
+app.MapDelete("/api/fuel-entries/{id:int}", async (AppDbContext db, HttpContext ctx, int id) =>
 {
+    var userId = GetUserId(ctx);
     var entry = await db.FuelEntries.FindAsync(id);
-    if (entry is null)
+    if (entry is null || entry.UserId != userId)
         return Results.NotFound();
 
     db.FuelEntries.Remove(entry);
     await db.SaveChangesAsync();
     return Results.NoContent();
-});
-
-app.MapPost("/api/clear-test-data", async (AppDbContext db) =>
-{
-    db.PaymentSchedules.RemoveRange(db.PaymentSchedules);
-    db.Payments.RemoveRange(db.Payments);
-    db.Carriers.RemoveRange(db.Carriers);
-    db.Routes.RemoveRange(db.Routes);
-    db.Discounts.RemoveRange(db.Discounts);
-    db.FuelEntries.RemoveRange(db.FuelEntries);
-    await db.SaveChangesAsync();
-    return Results.Ok("Test data cleared.");
-});
+}).RequireAuthorization();
 
 app.Run();
 
@@ -743,6 +807,14 @@ static decimal CalculateTotalAmount(decimal? fixedAmount, decimal? amountPerPack
     return fixedPart + variablePart;
 }
 
+static int GetUserId(HttpContext ctx)
+{
+    var value = ctx.User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+    if (!int.TryParse(value, out var id))
+        throw new InvalidOperationException("User ID claim missing from token.");
+    return id;
+}
+
 // ── DbContext ─────────────────────────────────────────────────────────────────
 
 public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(options)
@@ -753,6 +825,8 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
     public DbSet<PaymentSchedule> PaymentSchedules => Set<PaymentSchedule>();
     public DbSet<Payment> Payments => Set<Payment>();
     public DbSet<FuelEntry> FuelEntries => Set<FuelEntry>();
+    public DbSet<User> Users => Set<User>();
+    public DbSet<Ganho> Ganhos => Set<Ganho>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -772,6 +846,33 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
         modelBuilder.Entity<FuelEntry>().Property(x => x.Liters).HasColumnType("decimal(18,3)");
         modelBuilder.Entity<FuelEntry>().Property(x => x.FuelType).HasMaxLength(20).IsRequired();
         modelBuilder.Entity<FuelEntry>().Property(x => x.Notes).HasMaxLength(300);
+        modelBuilder.Entity<User>(entity =>
+        {
+            entity.HasIndex(u => u.Email).IsUnique();
+            entity.Property(u => u.Email).IsRequired();
+            entity.Property(u => u.PasswordHash).IsRequired();
+        });
+
+        modelBuilder.Entity<Ganho>(entity =>
+        {
+            entity.HasOne(g => g.User)
+                  .WithMany(u => u.Ganhos)
+                  .HasForeignKey(g => g.UserId);
+        });
+
+        modelBuilder.Entity<Carrier>()
+            .HasOne<User>()
+            .WithMany()
+            .HasForeignKey(c => c.UserId)
+            .IsRequired(false)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        modelBuilder.Entity<FuelEntry>()
+            .HasOne<User>()
+            .WithMany()
+            .HasForeignKey(f => f.UserId)
+            .IsRequired(false)
+            .OnDelete(DeleteBehavior.Restrict);
     }
 }
 
@@ -782,6 +883,7 @@ public class Carrier
     public int Id { get; set; }
     public string Name { get; set; } = string.Empty;
     public bool IsActive { get; set; } = true;
+    public int? UserId { get; set; }
     public DateTime CreatedAt { get; set; }
     public List<DeliveryRoute> Routes { get; set; } = [];
     public PaymentSchedule? PaymentSchedule { get; set; }
@@ -805,6 +907,7 @@ public class DeliveryRoute
 public class FuelEntry
 {
     public int Id { get; set; }
+    public int? UserId { get; set; }
     public DateOnly EntryDate { get; set; }
     public string FuelType { get; set; } = string.Empty;
     public decimal? Liters { get; set; }
