@@ -1,7 +1,9 @@
 import React, { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import authService from "../services/auth";
 
 function Login({ onLogin }) {
+  const navigate = useNavigate();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
@@ -59,6 +61,15 @@ function Login({ onLogin }) {
 
           <button type="submit" className="btn-full" disabled={loading}>
             {loading ? "Entrando..." : "Entrar"}
+          </button>
+
+          <button
+            type="button"
+            className="btn-full"
+            style={{ marginTop: 8, background: "transparent", color: "var(--text-secondary)", border: "1px solid var(--border-color)" }}
+            onClick={() => navigate("/register")}
+          >
+            Criar conta
           </button>
         </form>
       </div>

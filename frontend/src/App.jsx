@@ -4,8 +4,6 @@ import { HistoricoChart } from "./Charts";
 import React from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import Login from "./components/Login";
-import Register from "./components/Register";
-import Dashboard from "./components/Dashboard";
 import authService from "./services/auth";
 
 // ─── API ────────────────────────────────────────────────────────────────────
@@ -64,10 +62,6 @@ const request = async (path, options = {}) => {
   }
   if (response.status === 204) return null;
   return response.json();
-};
-
-const PrivateRoute = ({ children }) => {
-  return authService.isAuthenticated() ? children : <Navigate to="/login" />;
 };
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -334,10 +328,6 @@ export default function App() {
           <Route
             path="/login"
             element={<Login onLogin={() => setIsAuthenticated(true)} />}
-          />
-          <Route
-            path="/register"
-            element={<Register onRegister={() => setIsAuthenticated(true)} />}
           />
           <Route path="*" element={<Navigate to="/login" />} />
         </Routes>
