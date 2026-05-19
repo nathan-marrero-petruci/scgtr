@@ -1,6 +1,7 @@
 # Build outputs
 **/bin/
 **/obj/
+**/out/
 
 # .NET user/IDE files
 **/*.user

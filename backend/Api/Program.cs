@@ -10,8 +10,10 @@ using Api.Models;
 
 var builder = WebApplication.CreateBuilder(args);
 
-builder.Services.AddOpenApi();
-builder.Services.AddControllers();
+builder.Services.AddControllers().AddJsonOptions(o =>
+    o.JsonSerializerOptions.ReferenceHandler = ReferenceHandler.IgnoreCycles);
+builder.Services.Configure<Microsoft.AspNetCore.Http.Json.JsonOptions>(o =>
+    o.SerializerOptions.ReferenceHandler = ReferenceHandler.IgnoreCycles);
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
@@ -66,7 +68,8 @@ builder.Services.AddCors(options =>
                 }
                 return uri.Host.EndsWith(".vercel.app", StringComparison.OrdinalIgnoreCase)
                     || uri.Host.EndsWith(".pages.dev", StringComparison.OrdinalIgnoreCase)
-                    || uri.Host.EndsWith(".up.railway.app", StringComparison.OrdinalIgnoreCase);
+                    || uri.Host.EndsWith(".up.railway.app", StringComparison.OrdinalIgnoreCase)
+                    || uri.Host.EndsWith(".jndesenvolvimento.com.br", StringComparison.OrdinalIgnoreCase);
             })
             .AllowAnyHeader()
             .AllowAnyMethod()
@@ -87,7 +90,6 @@ if (app.Environment.IsDevelopment())
     app.UseSwagger();
     app.UseSwaggerUI();
 }
-    app.MapOpenApi();
     app.UseHttpsRedirection();
     app.UseAuthentication();
     app.UseAuthorization();
