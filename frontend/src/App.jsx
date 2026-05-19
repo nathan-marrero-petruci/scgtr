@@ -939,19 +939,6 @@ function FuelForm({ onError }) {
           <div className="form-row">
             <div className="form-group">
               <label>
-                Litros (opcional)
-                <input
-                  type="number"
-                  step="0.001"
-                  min="0.001"
-                  placeholder="0,000"
-                  value={form.liters}
-                  onChange={(e) => set("liters", e.target.value)}
-                />
-              </label>
-            </div>
-            <div className="form-group">
-              <label>
                 Valor total (R$)
                 <input
                   type="number"
@@ -961,6 +948,19 @@ function FuelForm({ onError }) {
                   value={form.totalCost}
                   onChange={(e) => set("totalCost", e.target.value)}
                   required
+                />
+              </label>
+            </div>
+            <div className="form-group">
+              <label>
+                Litros (opcional)
+                <input
+                  type="number"
+                  step="0.001"
+                  min="0.001"
+                  placeholder="0,000"
+                  value={form.liters}
+                  onChange={(e) => set("liters", e.target.value)}
                 />
               </label>
             </div>
