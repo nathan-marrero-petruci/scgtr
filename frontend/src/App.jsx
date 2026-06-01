@@ -614,6 +614,24 @@ function AgendaTab({ carriers, onError }) {
   );
 }
 
+// ─── Currency Input ──────────────────────────────────────────────────────────
+
+function CurrencyInput({ value, onChange, placeholder = "0,00", required }) {
+  const handleChange = (e) => {
+    let raw = e.target.value.replace(/[^\d,]/g, "").replace(",", ".");
+    const parts = raw.split(".");
+    if (parts.length > 2) raw = parts[0] + "." + parts[1];
+    onChange(raw);
+  };
+  const display = value === "" ? "" : String(value).replace(".", ",");
+  return (
+    <div style={{ position: "relative" }}>
+      <span style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: "var(--text-secondary)", fontSize: 14, pointerEvents: "none" }}>R$</span>
+      <input type="text" inputMode="decimal" value={display} onChange={handleChange} placeholder={placeholder} required={required} style={{ paddingLeft: 34 }} />
+    </div>
+  );
+}
+
 // ─── Registrar Tab ───────────────────────────────────────────────────────────
 
 function RegistrarTab({ activeCarriers, carriers, onRefresh, onError }) {
@@ -776,14 +794,7 @@ function RouteForm({ activeCarriers, onError }) {
           <div className="form-group">
             <label>
               Valor fixo (R$)
-              <input
-                type="number"
-                step="0.01"
-                min="0"
-                placeholder="0,00"
-                value={form.fixedAmount}
-                onChange={(e) => set("fixedAmount", e.target.value)}
-              />
+              <CurrencyInput value={form.fixedAmount} onChange={(v) => set("fixedAmount", v)} />
             </label>
           </div>
 
@@ -813,14 +824,7 @@ function RouteForm({ activeCarriers, onError }) {
               <div className="form-group">
                 <label>
                   Valor/pacote (R$)
-                  <input
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    placeholder="0,00"
-                    value={form.amountPerPackage}
-                    onChange={(e) => set("amountPerPackage", e.target.value)}
-                  />
+                  <CurrencyInput value={form.amountPerPackage} onChange={(v) => set("amountPerPackage", v)} />
                 </label>
               </div>
               {form.amountPerPackage !== "" &&
@@ -848,14 +852,7 @@ function RouteForm({ activeCarriers, onError }) {
                   key={idx}
                   style={{ display: "flex", gap: 8, marginBottom: 8 }}
                 >
-                  <input
-                    type="number"
-                    step="0.01"
-                    min="0.01"
-                    placeholder={`Pacote ${idx + 1}`}
-                    value={v}
-                    onChange={(e) => setPackageValue(idx, e.target.value)}
-                  />
+                  <CurrencyInput value={v} onChange={(val) => setPackageValue(idx, val)} placeholder={`Pacote ${idx + 1}`} />
                   {form.packageValues.length > 1 && (
                     <button
                       type="button"
@@ -1009,27 +1006,18 @@ function FuelForm({ onError }) {
             <div className="form-group">
               <label>
                 Valor total (R$)
-                <input
-                  type="number"
-                  step="0.01"
-                  min="0.01"
-                  placeholder="0,00"
-                  value={form.totalCost}
-                  onChange={(e) => set("totalCost", e.target.value)}
-                  required
-                />
+                <CurrencyInput value={form.totalCost} onChange={(v) => set("totalCost", v)} required />
               </label>
             </div>
             <div className="form-group">
               <label>
                 Litros (opcional)
                 <input
-                  type="number"
-                  step="0.001"
-                  min="0.001"
+                  type="text"
+                  inputMode="decimal"
                   placeholder="0,000"
                   value={form.liters}
-                  onChange={(e) => set("liters", e.target.value)}
+                  onChange={(e) => set("liters", e.target.value.replace(/[^\d.,]/g, ""))}
                 />
               </label>
             </div>
@@ -1345,7 +1333,7 @@ function DiscountRegistrar({ onError }) {
             <div className="form-group">
               <label>
                 Valor (R$)
-                <input type="number" step="0.01" min="0.01" placeholder="0,00" value={discountForm.discountAmount} onChange={(e) => setDiscountForm((p) => ({ ...p, discountAmount: e.target.value }))} required />
+                <CurrencyInput value={discountForm.discountAmount} onChange={(v) => setDiscountForm((p) => ({ ...p, discountAmount: v }))} required />
               </label>
             </div>
           </div>
@@ -1842,14 +1830,7 @@ function EditRouteModal({ route, activeCarriers, onClose, onSaved, onError }) {
           <div className="form-group">
             <label>
               Valor fixo (R$)
-              <input
-                type="number"
-                step="0.01"
-                min="0"
-                placeholder="0,00"
-                value={form.fixedAmount}
-                onChange={(e) => set("fixedAmount", e.target.value)}
-              />
+              <CurrencyInput value={form.fixedAmount} onChange={(v) => set("fixedAmount", v)} />
             </label>
           </div>
           <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
@@ -1877,14 +1858,7 @@ function EditRouteModal({ route, activeCarriers, onClose, onSaved, onError }) {
               <div className="form-group">
                 <label>
                   Valor/pacote (R$)
-                  <input
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    placeholder="0,00"
-                    value={form.amountPerPackage}
-                    onChange={(e) => set("amountPerPackage", e.target.value)}
-                  />
+                  <CurrencyInput value={form.amountPerPackage} onChange={(v) => set("amountPerPackage", v)} />
                 </label>
               </div>
               {form.amountPerPackage !== "" &&
@@ -1911,14 +1885,7 @@ function EditRouteModal({ route, activeCarriers, onClose, onSaved, onError }) {
                   key={idx}
                   style={{ display: "flex", gap: 8, marginBottom: 8 }}
                 >
-                  <input
-                    type="number"
-                    step="0.01"
-                    min="0.01"
-                    placeholder={`Pacote ${idx + 1}`}
-                    value={v}
-                    onChange={(e) => setPackageValue(idx, e.target.value)}
-                  />
+                  <CurrencyInput value={v} onChange={(val) => setPackageValue(idx, val)} placeholder={`Pacote ${idx + 1}`} />
                   {form.packageValues.length > 1 && (
                     <button
                       type="button"
