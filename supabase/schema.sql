@@ -40,6 +40,13 @@ CREATE TABLE IF NOT EXISTS "Discounts" (
     "CreatedAt"      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS "RoutePackages" (
+    "Id"        SERIAL PRIMARY KEY,
+    "RouteId"   INTEGER NOT NULL REFERENCES "Routes"("Id") ON DELETE CASCADE,
+    "Value"     NUMERIC(18,2) NOT NULL,
+    "CreatedAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 CREATE TABLE IF NOT EXISTS "Payments" (
     "Id"             SERIAL PRIMARY KEY,
     "CarrierId"      INTEGER NOT NULL REFERENCES "Carriers"("Id") ON DELETE CASCADE,
@@ -55,6 +62,7 @@ CREATE TABLE IF NOT EXISTS "Payments" (
 -- Índices
 CREATE INDEX IF NOT EXISTS "IX_DeliveryRoutes_CarrierId" ON "DeliveryRoutes"("CarrierId");
 CREATE INDEX IF NOT EXISTS "IX_Discounts_RouteId"        ON "Discounts"("RouteId");
+CREATE INDEX IF NOT EXISTS "IX_RoutePackages_RouteId"    ON "RoutePackages"("RouteId");
 CREATE INDEX IF NOT EXISTS "IX_Payments_CarrierId"       ON "Payments"("CarrierId");
 
 -- Tabela de controle de migrations do EF Core
