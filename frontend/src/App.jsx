@@ -4,8 +4,6 @@ import { HistoricoChart } from "./Charts";
 import React from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import Login from "./components/Login";
-import Register from "./components/Register";
-import Dashboard from "./components/Dashboard";
 import authService from "./services/auth";
 
 // ─── API ────────────────────────────────────────────────────────────────────
@@ -64,10 +62,6 @@ const request = async (path, options = {}) => {
   }
   if (response.status === 204) return null;
   return response.json();
-};
-
-const PrivateRoute = ({ children }) => {
-  return authService.isAuthenticated() ? children : <Navigate to="/login" />;
 };
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -334,10 +328,6 @@ export default function App() {
           <Route
             path="/login"
             element={<Login onLogin={() => setIsAuthenticated(true)} />}
-          />
-          <Route
-            path="/register"
-            element={<Register onRegister={() => setIsAuthenticated(true)} />}
           />
           <Route path="*" element={<Navigate to="/login" />} />
         </Routes>
@@ -683,17 +673,43 @@ function RouteForm({ activeCarriers, onError }) {
     amountPerPackage: "",
     packageCount: "",
     notes: "",
+    packageMode: "fixed",
+    packageValues: [""],
   });
   const [saving, setSaving] = useState(false);
   const [success, setSuccess] = useState(false);
 
   const set = (key, value) => setForm((prev) => ({ ...prev, [key]: value }));
 
+  const setPackageValue = (idx, value) =>
+    setForm((prev) => {
+      const next = [...prev.packageValues];
+      next[idx] = value;
+      return { ...prev, packageValues: next };
+    });
+
+  const addPackage = () =>
+    setForm((prev) => ({ ...prev, packageValues: [...prev.packageValues, ""] }));
+
+  const removePackage = (idx) =>
+    setForm((prev) => ({
+      ...prev,
+      packageValues: prev.packageValues.filter((_, i) => i !== idx),
+    }));
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setSaving(true);
     setSuccess(false);
     try {
+      const isCustom = form.packageMode === "custom";
+      const cleanValues = form.packageValues
+        .map((v) => Number(v))
+        .filter((v) => v > 0);
+      if (isCustom && cleanValues.length === 0) {
+        onError("Adicione pelo menos um valor de pacote.");
+        return;
+      }
       await request("/routes", {
         method: "POST",
         body: JSON.stringify({
@@ -702,8 +718,13 @@ function RouteForm({ activeCarriers, onError }) {
           fixedAmount:
             form.fixedAmount === "" ? null : Number(form.fixedAmount),
           amountPerPackage:
-            form.amountPerPackage === "" ? null : Number(form.amountPerPackage),
-          packageCount: Number(form.packageCount || 0),
+            isCustom || form.amountPerPackage === ""
+              ? null
+              : Number(form.amountPerPackage),
+          packageCount: isCustom
+            ? cleanValues.length
+            : Number(form.packageCount || 0),
+          packageValues: isCustom ? cleanValues : null,
           notes: form.notes || null,
         }),
       });
@@ -715,6 +736,8 @@ function RouteForm({ activeCarriers, onError }) {
         amountPerPackage: "",
         packageCount: "",
         notes: "",
+        packageMode: "fixed",
+        packageValues: [""],
       }));
       setSuccess(true);
       setTimeout(() => setSuccess(false), 3000);
@@ -727,6 +750,11 @@ function RouteForm({ activeCarriers, onError }) {
 
   const previewTotal = (() => {
     const fixo = Number(form.fixedAmount || 0);
+    if (form.packageMode === "custom") {
+      const soma = form.packageValues.reduce((s, v) => s + Number(v || 0), 0);
+      const total = fixo + soma;
+      return total > 0 ? fmt(total) : null;
+    }
     const porPacote = Number(form.amountPerPackage || 0);
     const qtd = Number(form.packageCount || 0);
     const total = fixo + porPacote * qtd;
@@ -773,51 +801,110 @@ function RouteForm({ activeCarriers, onError }) {
 
           <hr className="divider" />
 
-          <div className="form-row">
-            <div className="form-group">
-              <label>
-                Valor fixo (R$)
-                <input
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  placeholder="0,00"
-                  value={form.fixedAmount}
-                  onChange={(e) => set("fixedAmount", e.target.value)}
-                />
-              </label>
-            </div>
-            <div className="form-group">
-              <label>
-                Valor/pacote (R$)
-                <input
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  placeholder="0,00"
-                  value={form.amountPerPackage}
-                  onChange={(e) => set("amountPerPackage", e.target.value)}
-                />
-              </label>
-            </div>
+          <div className="form-group">
+            <label>
+              Valor fixo (R$)
+              <input
+                type="number"
+                step="0.01"
+                min="0"
+                placeholder="0,00"
+                value={form.fixedAmount}
+                onChange={(e) => set("fixedAmount", e.target.value)}
+              />
+            </label>
           </div>
 
-          {form.amountPerPackage !== "" &&
-            Number(form.amountPerPackage) > 0 && (
+          <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+            <button
+              type="button"
+              className={`filter-chip${
+                form.packageMode === "fixed" ? " active" : ""
+              }`}
+              onClick={() => set("packageMode", "fixed")}
+            >
+              Mesmo valor/pacote
+            </button>
+            <button
+              type="button"
+              className={`filter-chip${
+                form.packageMode === "custom" ? " active" : ""
+              }`}
+              onClick={() => set("packageMode", "custom")}
+            >
+              Valores diferentes
+            </button>
+          </div>
+
+          {form.packageMode === "fixed" ? (
+            <>
               <div className="form-group">
                 <label>
-                  Qtde de pacotes
+                  Valor/pacote (R$)
                   <input
                     type="number"
-                    min="1"
-                    placeholder="0"
-                    value={form.packageCount}
-                    onChange={(e) => set("packageCount", e.target.value)}
-                    required
+                    step="0.01"
+                    min="0"
+                    placeholder="0,00"
+                    value={form.amountPerPackage}
+                    onChange={(e) => set("amountPerPackage", e.target.value)}
                   />
                 </label>
               </div>
-            )}
+              {form.amountPerPackage !== "" &&
+                Number(form.amountPerPackage) > 0 && (
+                  <div className="form-group">
+                    <label>
+                      Qtde de pacotes
+                      <input
+                        type="number"
+                        min="1"
+                        placeholder="0"
+                        value={form.packageCount}
+                        onChange={(e) => set("packageCount", e.target.value)}
+                        required
+                      />
+                    </label>
+                  </div>
+                )}
+            </>
+          ) : (
+            <div className="form-group">
+              <label>Valor de cada pacote (R$)</label>
+              {form.packageValues.map((v, idx) => (
+                <div
+                  key={idx}
+                  style={{ display: "flex", gap: 8, marginBottom: 8 }}
+                >
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0.01"
+                    placeholder={`Pacote ${idx + 1}`}
+                    value={v}
+                    onChange={(e) => setPackageValue(idx, e.target.value)}
+                  />
+                  {form.packageValues.length > 1 && (
+                    <button
+                      type="button"
+                      className="btn-ghost btn-small"
+                      onClick={() => removePackage(idx)}
+                      style={{ flexShrink: 0 }}
+                    >
+                      ✕
+                    </button>
+                  )}
+                </div>
+              ))}
+              <button
+                type="button"
+                className="btn-ghost btn-small"
+                onClick={addPackage}
+              >
+                + Adicionar pacote
+              </button>
+            </div>
+          )}
 
           {previewTotal && (
             <div
@@ -949,19 +1036,6 @@ function FuelForm({ onError }) {
           <div className="form-row">
             <div className="form-group">
               <label>
-                Litros (opcional)
-                <input
-                  type="number"
-                  step="0.001"
-                  min="0.001"
-                  placeholder="0,000"
-                  value={form.liters}
-                  onChange={(e) => set("liters", e.target.value)}
-                />
-              </label>
-            </div>
-            <div className="form-group">
-              <label>
                 Valor total (R$)
                 <input
                   type="number"
@@ -971,6 +1045,19 @@ function FuelForm({ onError }) {
                   value={form.totalCost}
                   onChange={(e) => set("totalCost", e.target.value)}
                   required
+                />
+              </label>
+            </div>
+            <div className="form-group">
+              <label>
+                Litros (opcional)
+                <input
+                  type="number"
+                  step="0.001"
+                  min="0.001"
+                  placeholder="0,000"
+                  value={form.liters}
+                  onChange={(e) => set("liters", e.target.value)}
                 />
               </label>
             </div>
@@ -1253,6 +1340,9 @@ function HistoricoTab({ activeCarriers, onError }) {
                   <div className="route-item-meta">
                     {fmtDate(r.routeDate)}
                     {r.packageCount > 0 ? ` • ${r.packageCount} pct` : ""}
+                    {r.packageValues && r.packageValues.length > 0
+                      ? ` • ${r.packageValues.map((v) => fmt(v)).join(", ")}`
+                      : ""}
                     {r.totalDiscounts > 0
                       ? ` • PNR ${fmt(r.totalDiscounts)}`
                       : ""}
@@ -1366,6 +1456,7 @@ function HistoricoTab({ activeCarriers, onError }) {
 }
 
 function EditRouteModal({ route, activeCarriers, onClose, onSaved, onError }) {
+  const hasCustom = route.packageValues && route.packageValues.length > 0;
   const [form, setForm] = useState({
     carrierId: String(route.carrierId),
     routeDate: route.routeDate,
@@ -1374,12 +1465,35 @@ function EditRouteModal({ route, activeCarriers, onClose, onSaved, onError }) {
       route.amountPerPackage != null ? String(route.amountPerPackage) : "",
     packageCount: route.packageCount > 0 ? String(route.packageCount) : "",
     notes: route.notes || "",
+    packageMode: hasCustom ? "custom" : "fixed",
+    packageValues: hasCustom ? route.packageValues.map((v) => String(v)) : [""],
   });
   const [saving, setSaving] = useState(false);
   const set = (k, v) => setForm((p) => ({ ...p, [k]: v }));
 
+  const setPackageValue = (idx, value) =>
+    setForm((p) => {
+      const next = [...p.packageValues];
+      next[idx] = value;
+      return { ...p, packageValues: next };
+    });
+
+  const addPackage = () =>
+    setForm((p) => ({ ...p, packageValues: [...p.packageValues, ""] }));
+
+  const removePackage = (idx) =>
+    setForm((p) => ({
+      ...p,
+      packageValues: p.packageValues.filter((_, i) => i !== idx),
+    }));
+
   const previewTotal = (() => {
     const fixo = Number(form.fixedAmount || 0);
+    if (form.packageMode === "custom") {
+      const soma = form.packageValues.reduce((s, v) => s + Number(v || 0), 0);
+      const total = fixo + soma;
+      return total > 0 ? fmt(total) : null;
+    }
     const porPacote = Number(form.amountPerPackage || 0);
     const qtd = Number(form.packageCount || 0);
     const total = fixo + porPacote * qtd;
@@ -1390,6 +1504,14 @@ function EditRouteModal({ route, activeCarriers, onClose, onSaved, onError }) {
     e.preventDefault();
     setSaving(true);
     try {
+      const isCustom = form.packageMode === "custom";
+      const cleanValues = form.packageValues
+        .map((v) => Number(v))
+        .filter((v) => v > 0);
+      if (isCustom && cleanValues.length === 0) {
+        onError("Adicione pelo menos um valor de pacote.");
+        return;
+      }
       await request(`/routes/${route.id}`, {
         method: "PUT",
         body: JSON.stringify({
@@ -1398,8 +1520,13 @@ function EditRouteModal({ route, activeCarriers, onClose, onSaved, onError }) {
           fixedAmount:
             form.fixedAmount === "" ? null : Number(form.fixedAmount),
           amountPerPackage:
-            form.amountPerPackage === "" ? null : Number(form.amountPerPackage),
-          packageCount: Number(form.packageCount || 0),
+            isCustom || form.amountPerPackage === ""
+              ? null
+              : Number(form.amountPerPackage),
+          packageCount: isCustom
+            ? cleanValues.length
+            : Number(form.packageCount || 0),
+          packageValues: isCustom ? cleanValues : null,
           notes: form.notes || null,
         }),
       });
@@ -1456,49 +1583,107 @@ function EditRouteModal({ route, activeCarriers, onClose, onSaved, onError }) {
               />
             </label>
           </div>
-          <div className="form-row">
-            <div className="form-group">
-              <label>
-                Valor fixo (R$)
-                <input
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  placeholder="0,00"
-                  value={form.fixedAmount}
-                  onChange={(e) => set("fixedAmount", e.target.value)}
-                />
-              </label>
-            </div>
-            <div className="form-group">
-              <label>
-                Valor/pacote (R$)
-                <input
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  placeholder="0,00"
-                  value={form.amountPerPackage}
-                  onChange={(e) => set("amountPerPackage", e.target.value)}
-                />
-              </label>
-            </div>
+          <div className="form-group">
+            <label>
+              Valor fixo (R$)
+              <input
+                type="number"
+                step="0.01"
+                min="0"
+                placeholder="0,00"
+                value={form.fixedAmount}
+                onChange={(e) => set("fixedAmount", e.target.value)}
+              />
+            </label>
           </div>
-          {form.amountPerPackage !== "" &&
-            Number(form.amountPerPackage) > 0 && (
+          <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+            <button
+              type="button"
+              className={`filter-chip${
+                form.packageMode === "fixed" ? " active" : ""
+              }`}
+              onClick={() => set("packageMode", "fixed")}
+            >
+              Mesmo valor/pacote
+            </button>
+            <button
+              type="button"
+              className={`filter-chip${
+                form.packageMode === "custom" ? " active" : ""
+              }`}
+              onClick={() => set("packageMode", "custom")}
+            >
+              Valores diferentes
+            </button>
+          </div>
+          {form.packageMode === "fixed" ? (
+            <>
               <div className="form-group">
                 <label>
-                  Qtde de pacotes
+                  Valor/pacote (R$)
                   <input
                     type="number"
-                    min="1"
-                    value={form.packageCount}
-                    onChange={(e) => set("packageCount", e.target.value)}
-                    required
+                    step="0.01"
+                    min="0"
+                    placeholder="0,00"
+                    value={form.amountPerPackage}
+                    onChange={(e) => set("amountPerPackage", e.target.value)}
                   />
                 </label>
               </div>
-            )}
+              {form.amountPerPackage !== "" &&
+                Number(form.amountPerPackage) > 0 && (
+                  <div className="form-group">
+                    <label>
+                      Qtde de pacotes
+                      <input
+                        type="number"
+                        min="1"
+                        value={form.packageCount}
+                        onChange={(e) => set("packageCount", e.target.value)}
+                        required
+                      />
+                    </label>
+                  </div>
+                )}
+            </>
+          ) : (
+            <div className="form-group">
+              <label>Valor de cada pacote (R$)</label>
+              {form.packageValues.map((v, idx) => (
+                <div
+                  key={idx}
+                  style={{ display: "flex", gap: 8, marginBottom: 8 }}
+                >
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0.01"
+                    placeholder={`Pacote ${idx + 1}`}
+                    value={v}
+                    onChange={(e) => setPackageValue(idx, e.target.value)}
+                  />
+                  {form.packageValues.length > 1 && (
+                    <button
+                      type="button"
+                      className="btn-ghost btn-small"
+                      onClick={() => removePackage(idx)}
+                      style={{ flexShrink: 0 }}
+                    >
+                      ✕
+                    </button>
+                  )}
+                </div>
+              ))}
+              <button
+                type="button"
+                className="btn-ghost btn-small"
+                onClick={addPackage}
+              >
+                + Adicionar pacote
+              </button>
+            </div>
+          )}
           {previewTotal && (
             <div
               style={{

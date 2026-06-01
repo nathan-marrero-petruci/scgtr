@@ -10,8 +10,10 @@ using Api.Models;
 
 var builder = WebApplication.CreateBuilder(args);
 
-builder.Services.AddOpenApi();
-builder.Services.AddControllers();
+builder.Services.AddControllers().AddJsonOptions(o =>
+    o.JsonSerializerOptions.ReferenceHandler = ReferenceHandler.IgnoreCycles);
+builder.Services.Configure<Microsoft.AspNetCore.Http.Json.JsonOptions>(o =>
+    o.SerializerOptions.ReferenceHandler = ReferenceHandler.IgnoreCycles);
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
@@ -66,7 +68,8 @@ builder.Services.AddCors(options =>
                 }
                 return uri.Host.EndsWith(".vercel.app", StringComparison.OrdinalIgnoreCase)
                     || uri.Host.EndsWith(".pages.dev", StringComparison.OrdinalIgnoreCase)
-                    || uri.Host.EndsWith(".up.railway.app", StringComparison.OrdinalIgnoreCase);
+                    || uri.Host.EndsWith(".up.railway.app", StringComparison.OrdinalIgnoreCase)
+                    || uri.Host.EndsWith(".jndesenvolvimento.com.br", StringComparison.OrdinalIgnoreCase);
             })
             .AllowAnyHeader()
             .AllowAnyMethod()
@@ -79,7 +82,7 @@ var app = builder.Build();
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-    db.Database.Migrate();
+    db.Database.EnsureCreated();
 }
 
 if (app.Environment.IsDevelopment())
@@ -87,7 +90,6 @@ if (app.Environment.IsDevelopment())
     app.UseSwagger();
     app.UseSwaggerUI();
 }
-    app.MapOpenApi();
     app.UseHttpsRedirection();
     app.UseAuthentication();
     app.UseAuthorization();
@@ -283,6 +285,7 @@ app.MapGet("/api/routes", async (AppDbContext db, HttpContext ctx, DateOnly? sta
     var query = db.Routes
         .Include(x => x.Carrier)
         .Include(x => x.Discounts)
+        .Include(x => x.Packages)
         .Where(x => x.Carrier.UserId == userId)
         .AsQueryable();
 
@@ -308,7 +311,8 @@ app.MapGet("/api/routes", async (AppDbContext db, HttpContext ctx, DateOnly? sta
             x.Discounts.Sum(d => d.DiscountAmount),
             x.TotalAmount - x.Discounts.Sum(d => d.DiscountAmount),
             x.Notes,
-            x.CreatedAt
+            x.CreatedAt,
+            x.Packages.OrderBy(p => p.Id).Select(p => p.Value).ToList()
         ))
         .ToListAsync();
 
@@ -322,21 +326,35 @@ app.MapPost("/api/routes", async (AppDbContext db, HttpContext ctx, RouteCreateR
     if (carrier is null || !carrier.IsActive || carrier.UserId != userId)
         return Results.BadRequest("Invalid or inactive carrier.");
 
-    var validation = ValidateRouteFinancials(request.FixedAmount, request.AmountPerPackage, request.PackageCount);
-    if (!validation.IsValid)
-        return Results.BadRequest(validation.ErrorMessage);
+    var custom = request.PackageValues is { Count: > 0 };
+    if (custom && request.PackageValues!.Any(v => v <= 0))
+        return Results.BadRequest("Cada valor de pacote deve ser maior que zero.");
+
+    if (!custom)
+    {
+        var validation = ValidateRouteFinancials(request.FixedAmount, request.AmountPerPackage, request.PackageCount);
+        if (!validation.IsValid)
+            return Results.BadRequest(validation.ErrorMessage);
+    }
 
     var route = new DeliveryRoute
     {
         CarrierId = request.CarrierId,
         RouteDate = request.RouteDate,
         FixedAmount = request.FixedAmount,
-        AmountPerPackage = request.AmountPerPackage,
-        PackageCount = request.PackageCount,
-        TotalAmount = CalculateTotalAmount(request.FixedAmount, request.AmountPerPackage, request.PackageCount),
+        AmountPerPackage = custom ? null : request.AmountPerPackage,
+        PackageCount = custom ? request.PackageValues!.Count : request.PackageCount,
+        TotalAmount = custom
+            ? (request.FixedAmount ?? 0m) + request.PackageValues!.Sum()
+            : CalculateTotalAmount(request.FixedAmount, request.AmountPerPackage, request.PackageCount),
         Notes = string.IsNullOrWhiteSpace(request.Notes) ? null : request.Notes.Trim(),
         CreatedAt = DateTime.UtcNow
     };
+
+    if (custom)
+        route.Packages = request.PackageValues!
+            .Select(v => new RoutePackage { Value = v, CreatedAt = DateTime.UtcNow })
+            .ToList();
 
     db.Routes.Add(route);
     await db.SaveChangesAsync();
@@ -347,7 +365,7 @@ app.MapPost("/api/routes", async (AppDbContext db, HttpContext ctx, RouteCreateR
 app.MapPut("/api/routes/{id:int}", async (AppDbContext db, HttpContext ctx, int id, RouteCreateRequest request) =>
 {
     var userId = GetUserId(ctx);
-    var route = await db.Routes.Include(r => r.Carrier).FirstOrDefaultAsync(r => r.Id == id);
+    var route = await db.Routes.Include(r => r.Carrier).Include(r => r.Packages).FirstOrDefaultAsync(r => r.Id == id);
     if (route is null || route.Carrier.UserId != userId)
         return Results.NotFound();
 
@@ -355,17 +373,33 @@ app.MapPut("/api/routes/{id:int}", async (AppDbContext db, HttpContext ctx, int 
     if (carrier is null || !carrier.IsActive || carrier.UserId != userId)
         return Results.BadRequest("Invalid or inactive carrier.");
 
-    var validation = ValidateRouteFinancials(request.FixedAmount, request.AmountPerPackage, request.PackageCount);
-    if (!validation.IsValid)
-        return Results.BadRequest(validation.ErrorMessage);
+    var custom = request.PackageValues is { Count: > 0 };
+    if (custom && request.PackageValues!.Any(v => v <= 0))
+        return Results.BadRequest("Cada valor de pacote deve ser maior que zero.");
+
+    if (!custom)
+    {
+        var validation = ValidateRouteFinancials(request.FixedAmount, request.AmountPerPackage, request.PackageCount);
+        if (!validation.IsValid)
+            return Results.BadRequest(validation.ErrorMessage);
+    }
 
     route.CarrierId = request.CarrierId;
     route.RouteDate = request.RouteDate;
     route.FixedAmount = request.FixedAmount;
-    route.AmountPerPackage = request.AmountPerPackage;
-    route.PackageCount = request.PackageCount;
-    route.TotalAmount = CalculateTotalAmount(request.FixedAmount, request.AmountPerPackage, request.PackageCount);
+    route.AmountPerPackage = custom ? null : request.AmountPerPackage;
+    route.PackageCount = custom ? request.PackageValues!.Count : request.PackageCount;
+    route.TotalAmount = custom
+        ? (request.FixedAmount ?? 0m) + request.PackageValues!.Sum()
+        : CalculateTotalAmount(request.FixedAmount, request.AmountPerPackage, request.PackageCount);
     route.Notes = string.IsNullOrWhiteSpace(request.Notes) ? null : request.Notes.Trim();
+
+    db.RoutePackages.RemoveRange(route.Packages);
+    route.Packages = new List<RoutePackage>();
+    if (custom)
+        db.RoutePackages.AddRange(request.PackageValues!
+            .Select(v => new RoutePackage { RouteId = route.Id, Value = v, CreatedAt = DateTime.UtcNow }));
+
     await db.SaveChangesAsync();
 
     return Results.Ok(route);
@@ -822,6 +856,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
     public DbSet<Carrier> Carriers => Set<Carrier>();
     public DbSet<DeliveryRoute> Routes => Set<DeliveryRoute>();
     public DbSet<Discount> Discounts => Set<Discount>();
+    public DbSet<RoutePackage> RoutePackages => Set<RoutePackage>();
     public DbSet<PaymentSchedule> PaymentSchedules => Set<PaymentSchedule>();
     public DbSet<Payment> Payments => Set<Payment>();
     public DbSet<FuelEntry> FuelEntries => Set<FuelEntry>();
@@ -837,6 +872,12 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
         modelBuilder.Entity<DeliveryRoute>().Property(x => x.Notes).HasMaxLength(300);
         modelBuilder.Entity<Discount>().Property(x => x.DiscountAmount).HasColumnType("decimal(18,2)");
         modelBuilder.Entity<Discount>().Property(x => x.Notes).HasMaxLength(300);
+        modelBuilder.Entity<RoutePackage>().Property(x => x.Value).HasColumnType("decimal(18,2)");
+        modelBuilder.Entity<RoutePackage>()
+            .HasOne(p => p.Route)
+            .WithMany(r => r.Packages)
+            .HasForeignKey(p => p.RouteId)
+            .OnDelete(DeleteBehavior.Cascade);
         modelBuilder.Entity<PaymentSchedule>().Property(x => x.Frequency).HasMaxLength(20).IsRequired();
         modelBuilder.Entity<PaymentSchedule>().Property(x => x.Weekday);
         modelBuilder.Entity<PaymentSchedule>().Property(x => x.DayOfMonth);
@@ -902,6 +943,7 @@ public class DeliveryRoute
     public string? Notes { get; set; }
     public DateTime CreatedAt { get; set; }
     public List<Discount> Discounts { get; set; } = [];
+    public List<RoutePackage> Packages { get; set; } = [];
 }
 
 public class FuelEntry
@@ -924,6 +966,16 @@ public class Discount
     public DateOnly DiscountDate { get; set; }
     public decimal DiscountAmount { get; set; }
     public string? Notes { get; set; }
+    public DateTime CreatedAt { get; set; }
+}
+
+public class RoutePackage
+{
+    public int Id { get; set; }
+    public int RouteId { get; set; }
+    [System.Text.Json.Serialization.JsonIgnore]
+    public DeliveryRoute Route { get; set; } = null!;
+    public decimal Value { get; set; }
     public DateTime CreatedAt { get; set; }
 }
 
@@ -963,11 +1015,12 @@ public record CarrierResponse(int Id, string Name, bool IsActive, PaymentSchedul
 public record CarrierCreateRequest(string Name);
 public record CarrierUpdateRequest(string Name, bool IsActive);
 
-public record RouteCreateRequest(int CarrierId, DateOnly RouteDate, decimal? FixedAmount, decimal? AmountPerPackage, int PackageCount, string? Notes = null);
+public record RouteCreateRequest(int CarrierId, DateOnly RouteDate, decimal? FixedAmount, decimal? AmountPerPackage, int PackageCount, List<decimal>? PackageValues = null, string? Notes = null);
 public record RouteResponse(
     int Id, int CarrierId, string CarrierName, DateOnly RouteDate,
     decimal? FixedAmount, decimal? AmountPerPackage, int PackageCount,
-    decimal TotalAmount, decimal TotalDiscounts, decimal NetAmount, string? Notes, DateTime CreatedAt
+    decimal TotalAmount, decimal TotalDiscounts, decimal NetAmount, string? Notes, DateTime CreatedAt,
+    List<decimal> PackageValues
 );
 
 public record FuelEntryCreateRequest(DateOnly EntryDate, string FuelType, decimal? Liters, decimal TotalCost, string? Notes = null);
