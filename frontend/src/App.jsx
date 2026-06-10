@@ -4,6 +4,7 @@ import { HistoricoChart } from "./Charts";
 import React from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import Login from "./components/Login";
+import HelpTab from "./components/HelpTab";
 import authService from "./services/auth";
 
 // ─── API ────────────────────────────────────────────────────────────────────
@@ -75,6 +76,13 @@ const fmtDate = (dateStr) => {
   if (!dateStr) return "";
   const [y, m, d] = dateStr.split("-");
   return `${d}/${m}/${y}`;
+};
+
+const fmtDateShort = (dateStr) => {
+  if (!dateStr) return "";
+  const [y, m, d] = dateStr.split("-");
+  const currentYear = new Date().getFullYear().toString();
+  return y === currentYear ? `${d}/${m}` : `${d}/${m}/${y}`;
 };
 
 const WEEKDAY_FULL = [
@@ -204,6 +212,23 @@ const IconHistory = () => (
   </svg>
 );
 
+const IconHelp = () => (
+  <svg
+    width="22"
+    height="22"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+  >
+    <circle cx="12" cy="12" r="10" />
+    <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
+    <line x1="12" y1="17" x2="12.01" y2="17" />
+  </svg>
+);
+
 // ─── App ────────────────────────────────────────────────────────────────────
 
 export default function App() {
@@ -277,12 +302,14 @@ export default function App() {
     { id: "agenda", label: "Agenda", Icon: IconAgenda },
     { id: "registrar", label: "Registrar", Icon: IconRegister },
     { id: "historico", label: "Histórico", Icon: IconHistory },
+    { id: "ajuda", label: "Ajuda", Icon: IconHelp },
   ];
 
   const tabTitles = {
     agenda: "Próximos Recebimentos",
     registrar: "Registrar",
     historico: "Histórico",
+    ajuda: "Central de Ajuda",
   };
 
   // Se ainda está carregando, mostra loading
@@ -323,16 +350,16 @@ export default function App() {
       <header className="app-header">
         <h1>{tabTitles[tab]}</h1>
         <div className="app-header-right">
-          <label className="theme-toggle" title={theme === "dark" ? "Modo claro" : "Modo escuro"}>
-            <input
-              type="checkbox"
-              checked={theme === "dark"}
-              onChange={() =>
-                setTheme((t) => (t === "light" ? "dark" : "light"))
-              }
-            />
-            <span className="slider" />
-          </label>
+          <button
+            className="theme-btn"
+            onClick={() => setTheme((t) => (t === "light" ? "dark" : "light"))}
+            title={theme === "dark" ? "Modo claro" : "Modo escuro"}
+            aria-label={theme === "dark" ? "Mudar para modo claro" : "Mudar para modo escuro"}
+          >
+            <span key={theme} className="theme-btn-icon">
+              {theme === "dark" ? "🌙" : "☀️"}
+            </span>
+          </button>
           <button onClick={handleLogout} className="btn-ghost btn-small">
             Sair
           </button>
@@ -374,6 +401,7 @@ export default function App() {
         {tab === "historico" && (
           <HistoricoTab activeCarriers={activeCarriers} onError={setError} />
         )}
+        {tab === "ajuda" && <HelpTab />}
       </main>
 
       <nav className="bottom-nav">
@@ -632,7 +660,7 @@ function AgendaTab({ carriers, onError }) {
                     <div>
                       <div className="payment-item-name">{p.carrierName}</div>
                       <div className="payment-item-period">
-                        {fmtDate(p.periodStart)} → {fmtDate(p.periodEnd)}
+                        {fmtDateShort(p.periodStart)} → {fmtDateShort(p.periodEnd)}
                       </div>
                     </div>
                     <div className="payment-item-amount">
