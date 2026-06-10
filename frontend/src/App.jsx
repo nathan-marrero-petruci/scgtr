@@ -323,32 +323,17 @@ export default function App() {
       <header className="app-header">
         <h1>{tabTitles[tab]}</h1>
         <div className="app-header-right">
-          <div className="theme-toggle-wrapper">
-            <span style={{ fontSize: 16 }}>☀️</span>
-            <label className="theme-toggle">
-              <input
-                type="checkbox"
-                checked={theme === "dark"}
-                onChange={() =>
-                  setTheme((t) => (t === "light" ? "dark" : "light"))
-                }
-              />
-              <span className="slider" />
-            </label>
-            <span style={{ fontSize: 16 }}>🌙</span>
-          </div>
-          <button
-            onClick={handleLogout}
-            style={{
-              marginLeft: "15px",
-              padding: "5px 10px",
-              backgroundColor: "#e74c3c",
-              color: "white",
-              border: "none",
-              borderRadius: "4px",
-              cursor: "pointer",
-            }}
-          >
+          <label className="theme-toggle" title={theme === "dark" ? "Modo claro" : "Modo escuro"}>
+            <input
+              type="checkbox"
+              checked={theme === "dark"}
+              onChange={() =>
+                setTheme((t) => (t === "light" ? "dark" : "light"))
+              }
+            />
+            <span className="slider" />
+          </label>
+          <button onClick={handleLogout} className="btn-ghost btn-small">
             Sair
           </button>
         </div>
@@ -492,8 +477,81 @@ function AgendaTab({ carriers, onError }) {
     { id: "all", label: "Todos" },
   ];
 
+  const nextPayment = !loading
+    ? [...payments]
+        .filter(
+          (p) =>
+            !p.paid &&
+            p.scheduledDate >= today &&
+            Number(p.amountDue ?? 0) > 0
+        )
+        .sort((a, b) => a.scheduledDate.localeCompare(b.scheduledDate))[0]
+    : null;
+
+  const overduePayments = !loading
+    ? payments.filter(
+        (p) =>
+          !p.paid &&
+          p.scheduledDate < today &&
+          Number(p.amountDue ?? 0) > 0
+      )
+    : [];
+
+  const overdueTotal = overduePayments.reduce(
+    (s, p) => s + Number(p.amountDue ?? 0),
+    0
+  );
+
+  const fmtNumber = (n) =>
+    new Intl.NumberFormat("pt-BR", { minimumFractionDigits: 2 }).format(
+      Number(n ?? 0)
+    );
+
   return (
     <div>
+      {!loading && (overduePayments.length > 0 || nextPayment) && (
+        <div
+          className={`hero-card ${overduePayments.length > 0 ? "overdue" : "upcoming"}`}
+        >
+          {overduePayments.length > 0 ? (
+            <>
+              <div className="hero-eyebrow">Atenção</div>
+              <div className="hero-sub">
+                {overduePayments.length === 1
+                  ? "1 pagamento em atraso"
+                  : `${overduePayments.length} pagamentos em atraso`}
+              </div>
+              <div className="hero-amount danger">
+                <span className="currency">R$</span>
+                {fmtNumber(overdueTotal)}
+              </div>
+              <span className="hero-pill red">● Atrasado</span>
+            </>
+          ) : (
+            <>
+              <div className="hero-eyebrow">Próximo recebimento</div>
+              <div className="hero-sub">
+                {nextPayment.carrierName} ·{" "}
+                {getDateLabel(nextPayment.scheduledDate).date}
+              </div>
+              <div className="hero-amount">
+                <span className="currency">R$</span>
+                {fmtNumber(nextPayment.amountDue)}
+              </div>
+              <span
+                className={`hero-pill ${
+                  getDateLabel(nextPayment.scheduledDate).type === "soon"
+                    ? "orange"
+                    : "green"
+                }`}
+              >
+                ● {getDateLabel(nextPayment.scheduledDate).label}
+              </span>
+            </>
+          )}
+        </div>
+      )}
+
       <div className="agenda-filter">
         {FILTERS.map((f) => (
           <button
@@ -510,17 +568,16 @@ function AgendaTab({ carriers, onError }) {
         <div
           style={{
             background: "var(--badge-pending-bg)",
-            border: "1px solid var(--badge-pending-border)",
-            borderRadius: 8,
+            borderRadius: 10,
             padding: "10px 14px",
-            marginBottom: 12,
+            marginBottom: 14,
             fontSize: 13,
             color: "var(--badge-pending-text)",
           }}
         >
           <strong>Sem agendamento:</strong>{" "}
           {noSchedule.map((c) => c.name).join(", ")}. Configure em{" "}
-          <strong>Config → Agenda</strong> para aparecer aqui.
+          <strong>Registrar → Transportadoras</strong>.
         </div>
       )}
 
@@ -530,11 +587,9 @@ function AgendaTab({ carriers, onError }) {
         <div className="agenda-empty">
           <div style={{ fontSize: 40, marginBottom: 12 }}>📋</div>
           <div>Nenhum recebimento encontrado.</div>
-          <div
-            style={{ fontSize: 13, marginTop: 8, color: "var(--text-muted)" }}
-          >
+          <div style={{ fontSize: 13, marginTop: 8 }}>
             {noSchedule.length > 0
-              ? "Configure o agendamento das transportadoras em Config."
+              ? "Configure o agendamento das transportadoras."
               : "Nenhum pagamento pendente neste período."}
           </div>
         </div>
@@ -558,7 +613,7 @@ function AgendaTab({ carriers, onError }) {
           <div key={dateStr} className="payment-group">
             <div className="payment-group-header">
               <span className="payment-group-date">{date}</span>
-              {!allPaid && type !== "overdue" && (
+              {!allPaid && (
                 <span className={`payment-group-label ${type}`}>{label}</span>
               )}
             </div>
@@ -566,8 +621,13 @@ function AgendaTab({ carriers, onError }) {
             {items.map((p, idx) => {
               const key = `${p.carrierId}-${p.scheduledDate}-${p.periodStart}`;
               const isConfirming = confirmingId === key;
+              const statusClass = p.paid
+                ? "status-paid"
+                : type === "overdue"
+                ? "status-overdue"
+                : "status-pending";
               return (
-                <div key={idx} className="payment-item">
+                <div key={idx} className={`payment-item ${statusClass}`}>
                   <div className="payment-item-row">
                     <div>
                       <div className="payment-item-name">{p.carrierName}</div>
@@ -581,7 +641,7 @@ function AgendaTab({ carriers, onError }) {
                   </div>
                   <div className="payment-item-footer">
                     {p.paid ? (
-                      <span className="badge badge-paid">Recebido</span>
+                      <span className="badge badge-paid">✓ Recebido</span>
                     ) : type === "overdue" ? (
                       <span className="badge badge-overdue">Atrasado</span>
                     ) : (
@@ -589,11 +649,11 @@ function AgendaTab({ carriers, onError }) {
                     )}
                     {!p.paid && (
                       <button
-                        className="btn-success btn-small"
+                        className="btn-confirm"
                         disabled={isConfirming}
                         onClick={() => handleConfirm(p)}
                       >
-                        {isConfirming ? "Salvando..." : "Confirmar recebimento"}
+                        {isConfirming ? "..." : "✓ Confirmar"}
                       </button>
                     )}
                   </div>
@@ -625,9 +685,9 @@ function CurrencyInput({ value, onChange, placeholder = "0,00", required }) {
   };
   const display = value === "" ? "" : String(value).replace(".", ",");
   return (
-    <div style={{ position: "relative" }}>
-      <span style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: "var(--text-secondary)", fontSize: 14, pointerEvents: "none" }}>R$</span>
-      <input type="text" inputMode="decimal" value={display} onChange={handleChange} placeholder={placeholder} required={required} style={{ paddingLeft: 34 }} />
+    <div className="currency-wrap">
+      <span className="currency-prefix">R$</span>
+      <input type="text" inputMode="decimal" value={display} onChange={handleChange} placeholder={placeholder} required={required} />
     </div>
   );
 }
@@ -635,26 +695,82 @@ function CurrencyInput({ value, onChange, placeholder = "0,00", required }) {
 // ─── Registrar Tab ───────────────────────────────────────────────────────────
 
 function RegistrarTab({ activeCarriers, carriers, onRefresh, onError }) {
-  const [type, setType] = useState("route");
+  const [openSheet, setOpenSheet] = useState(null);
+
+  const TILES = [
+    { id: "route",   icon: "🚚", color: "green",  label: "Rota",            sub: "Registrar entrega" },
+    { id: "fuel",    icon: "⛽", color: "blue",   label: "Combustível",     sub: "Abastecimento" },
+    { id: "carrier", icon: "🏢", color: "orange", label: "Transportadoras", sub: "Gerenciar" },
+    { id: "pnr",     icon: "🏷️", color: "red",    label: "PNR",             sub: "Descontos" },
+  ];
+
+  const SHEET_TITLES = {
+    route:   "Registrar Rota",
+    fuel:    "Combustível",
+    carrier: "Transportadoras",
+    pnr:     "Desconto PNR",
+  };
 
   return (
     <div>
-      <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
-        <button className={`filter-chip${type === "route" ? " active" : ""}`} onClick={() => setType("route")}>Rota</button>
-        <button className={`filter-chip${type === "fuel" ? " active" : ""}`} onClick={() => setType("fuel")}>Combustível</button>
-        <button className={`filter-chip${type === "carrier" ? " active" : ""}`} onClick={() => setType("carrier")}>Transportadora</button>
-        <button className={`filter-chip${type === "pnr" ? " active" : ""}`} onClick={() => setType("pnr")}>PNR</button>
+      <div className="action-grid">
+        {TILES.map(({ id, icon, color, label, sub }) => (
+          <button
+            key={id}
+            className="action-tile"
+            onClick={() => setOpenSheet(id)}
+          >
+            <span className={`action-tile-icon ${color}`}>{icon}</span>
+            <span className="action-tile-label">{label}</span>
+            <span className="action-tile-sub">{sub}</span>
+          </button>
+        ))}
       </div>
 
-      {type === "route" && <RouteForm activeCarriers={activeCarriers} onError={onError} />}
-      {type === "fuel" && <FuelForm onError={onError} />}
-      {type === "carrier" && <CarrierManager carriers={carriers} onRefresh={onRefresh} onError={onError} />}
-      {type === "pnr" && <DiscountRegistrar onError={onError} />}
+      {openSheet && (
+        <div className="modal-overlay" onClick={() => setOpenSheet(null)}>
+          <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
+            <div className="sheet-handle" />
+            <div className="sheet-header">
+              <h2>{SHEET_TITLES[openSheet]}</h2>
+              <button
+                className="btn-ghost btn-small"
+                onClick={() => setOpenSheet(null)}
+              >
+                ✕
+              </button>
+            </div>
+            {openSheet === "route" && (
+              <RouteForm
+                activeCarriers={activeCarriers}
+                onError={onError}
+                onSuccess={() => setOpenSheet(null)}
+              />
+            )}
+            {openSheet === "fuel" && (
+              <FuelForm
+                onError={onError}
+                onSuccess={() => setOpenSheet(null)}
+              />
+            )}
+            {openSheet === "carrier" && (
+              <CarrierManager
+                carriers={carriers}
+                onRefresh={onRefresh}
+                onError={onError}
+              />
+            )}
+            {openSheet === "pnr" && (
+              <DiscountRegistrar onError={onError} />
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
-function RouteForm({ activeCarriers, onError }) {
+function RouteForm({ activeCarriers, onError, onSuccess }) {
   const lastCarrierId = localStorage.getItem("lastCarrierId") || "";
   const [form, setForm] = useState({
     carrierId: lastCarrierId,
@@ -729,8 +845,12 @@ function RouteForm({ activeCarriers, onError }) {
         packageMode: "fixed",
         packageValues: [""],
       }));
-      setSuccess(true);
-      setTimeout(() => setSuccess(false), 3000);
+      if (onSuccess) {
+        onSuccess();
+      } else {
+        setSuccess(true);
+        setTimeout(() => setSuccess(false), 3000);
+      }
     } catch (err) {
       onError(err.message);
     } finally {
@@ -760,21 +880,26 @@ function RouteForm({ activeCarriers, onError }) {
       <form onSubmit={handleSubmit}>
         <div className="card">
           <div className="form-group">
-            <label>
-              Transportadora
-              <select
-                value={form.carrierId}
-                onChange={(e) => set("carrierId", e.target.value)}
-                required
-              >
-                <option value="">Selecione...</option>
-                {activeCarriers.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <label>Transportadora</label>
+            <div className="carrier-chips">
+              {activeCarriers.map((c) => (
+                <button
+                  key={c.id}
+                  type="button"
+                  className={`carrier-chip${
+                    form.carrierId === String(c.id) ? " active" : ""
+                  }`}
+                  onClick={() => set("carrierId", String(c.id))}
+                >
+                  {c.name}
+                </button>
+              ))}
+              {activeCarriers.length === 0 && (
+                <span style={{ fontSize: 13, color: "var(--text-muted)" }}>
+                  Nenhuma transportadora ativa.
+                </span>
+              )}
+            </div>
           </div>
 
           <div className="form-group">
@@ -876,21 +1001,9 @@ function RouteForm({ activeCarriers, onError }) {
           )}
 
           {previewTotal && (
-            <div
-              style={{
-                background: "var(--bg-secondary)",
-                borderRadius: 8,
-                padding: "10px 14px",
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-                marginTop: 4,
-              }}
-            >
-              <span style={{ fontSize: 14, color: "var(--text-secondary)" }}>
-                Total desta rota
-              </span>
-              <strong style={{ fontSize: 18 }}>{previewTotal}</strong>
+            <div className="preview-total">
+              <span className="preview-total-label">Total desta rota</span>
+              <strong className="preview-total-value">{previewTotal}</strong>
             </div>
           )}
 
@@ -918,7 +1031,7 @@ function RouteForm({ activeCarriers, onError }) {
   );
 }
 
-function FuelForm({ onError }) {
+function FuelForm({ onError, onSuccess }) {
   const [form, setForm] = useState({
     entryDate: todayStr(),
     fuelType: "gasoline",
@@ -953,8 +1066,12 @@ function FuelForm({ onError }) {
         totalCost: "",
         notes: "",
       });
-      setSuccess(true);
-      setTimeout(() => setSuccess(false), 3000);
+      if (onSuccess) {
+        onSuccess();
+      } else {
+        setSuccess(true);
+        setTimeout(() => setSuccess(false), 3000);
+      }
     } catch (err) {
       onError(err.message);
     } finally {
@@ -1024,21 +1141,9 @@ function FuelForm({ onError }) {
           </div>
 
           {pricePerLiter && (
-            <div
-              style={{
-                background: "var(--bg-secondary)",
-                borderRadius: 8,
-                padding: "10px 14px",
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-                marginTop: 4,
-              }}
-            >
-              <span style={{ fontSize: 14, color: "var(--text-secondary)" }}>
-                Preço/litro
-              </span>
-              <strong style={{ fontSize: 18 }}>R$ {pricePerLiter}</strong>
+            <div className="preview-total">
+              <span className="preview-total-label">Preço/litro</span>
+              <strong className="preview-total-value">R$ {pricePerLiter}</strong>
             </div>
           )}
 
@@ -1547,11 +1652,9 @@ function HistoricoTab({ activeCarriers, onError }) {
                 -{fmt(summary.totalFuel)}
               </strong>
             </div>
-            <div className="metric-card" style={{ gridColumn: "span 2" }}>
+            <div className="metric-card highlight" style={{ gridColumn: "span 2" }}>
               <span>Ganho Real</span>
-              <strong style={{ fontSize: "1.1em" }}>
-                {fmt(summary.realEarnings)}
-              </strong>
+              <strong>{fmt(summary.realEarnings)}</strong>
             </div>
           </div>
 

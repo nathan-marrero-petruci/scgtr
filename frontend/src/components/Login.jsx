@@ -27,50 +27,55 @@ function Login({ onLogin }) {
     <div className="auth-page">
       <div className="auth-card">
         <div className="auth-header">
-          <div className="auth-logo">S</div>
+          <div className="auth-logo">SC</div>
           <h1 className="auth-title">SCGTR</h1>
-          <p className="auth-subtitle">Sistema de Controle de Ganhos</p>
+          <p className="auth-subtitle">Controle de Ganhos</p>
         </div>
 
         <form className="auth-form" onSubmit={handleSubmit}>
           {error && <div className="auth-error">{error}</div>}
 
-          <label>
-            Email
-            <input
-              type="email"
-              placeholder="seu@email.com"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              required
-              autoComplete="email"
-            />
-          </label>
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label>
+              Email
+              <input
+                type="email"
+                placeholder="seu@email.com"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                required
+                autoComplete="email"
+                autoFocus
+              />
+            </label>
+          </div>
 
-          <label>
-            Senha
-            <input
-              type="password"
-              placeholder="••••••••"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-              autoComplete="current-password"
-            />
-          </label>
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label>
+              Senha
+              <input
+                type="password"
+                placeholder="••••••••"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+                autoComplete="current-password"
+              />
+            </label>
+          </div>
 
-          <button type="submit" className="btn-full" disabled={loading}>
-            {loading ? "Entrando..." : "Entrar"}
-          </button>
-
-          <button
-            type="button"
-            className="btn-full"
-            style={{ marginTop: 8, background: "transparent", color: "var(--text-secondary)", border: "1px solid var(--border-color)" }}
-            onClick={() => navigate("/register")}
-          >
-            Criar conta
-          </button>
+          <div className="auth-actions">
+            <button type="submit" className="btn-full" disabled={loading}>
+              {loading ? "Entrando..." : "Entrar"}
+            </button>
+            <button
+              type="button"
+              className="btn-full btn-ghost"
+              onClick={() => navigate("/register")}
+            >
+              Criar conta
+            </button>
+          </div>
         </form>
       </div>
     </div>
