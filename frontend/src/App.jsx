@@ -204,22 +204,6 @@ const IconHistory = () => (
   </svg>
 );
 
-const IconConfig = () => (
-  <svg
-    width="22"
-    height="22"
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    strokeWidth="2"
-    strokeLinecap="round"
-    strokeLinejoin="round"
-  >
-    <circle cx="12" cy="12" r="3" />
-    <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-  </svg>
-);
-
 // ─── App ────────────────────────────────────────────────────────────────────
 
 export default function App() {
@@ -293,14 +277,12 @@ export default function App() {
     { id: "agenda", label: "Agenda", Icon: IconAgenda },
     { id: "registrar", label: "Registrar", Icon: IconRegister },
     { id: "historico", label: "Histórico", Icon: IconHistory },
-    { id: "config", label: "Config", Icon: IconConfig },
   ];
 
   const tabTitles = {
     agenda: "Próximos Recebimentos",
     registrar: "Registrar",
     historico: "Histórico",
-    config: "Configurações",
   };
 
   // Se ainda está carregando, mostra loading
@@ -341,32 +323,17 @@ export default function App() {
       <header className="app-header">
         <h1>{tabTitles[tab]}</h1>
         <div className="app-header-right">
-          <div className="theme-toggle-wrapper">
-            <span style={{ fontSize: 16 }}>☀️</span>
-            <label className="theme-toggle">
-              <input
-                type="checkbox"
-                checked={theme === "dark"}
-                onChange={() =>
-                  setTheme((t) => (t === "light" ? "dark" : "light"))
-                }
-              />
-              <span className="slider" />
-            </label>
-            <span style={{ fontSize: 16 }}>🌙</span>
-          </div>
-          <button
-            onClick={handleLogout}
-            style={{
-              marginLeft: "15px",
-              padding: "5px 10px",
-              backgroundColor: "#e74c3c",
-              color: "white",
-              border: "none",
-              borderRadius: "4px",
-              cursor: "pointer",
-            }}
-          >
+          <label className="theme-toggle" title={theme === "dark" ? "Modo claro" : "Modo escuro"}>
+            <input
+              type="checkbox"
+              checked={theme === "dark"}
+              onChange={() =>
+                setTheme((t) => (t === "light" ? "dark" : "light"))
+              }
+            />
+            <span className="slider" />
+          </label>
+          <button onClick={handleLogout} className="btn-ghost btn-small">
             Sair
           </button>
         </div>
@@ -394,13 +361,8 @@ export default function App() {
           />
         )}
         {tab === "registrar" && (
-          <RegistrarTab activeCarriers={activeCarriers} onError={setError} />
-        )}
-        {tab === "historico" && (
-          <HistoricoTab activeCarriers={activeCarriers} onError={setError} />
-        )}
-        {tab === "config" && (
-          <ConfigTab
+          <RegistrarTab
+            activeCarriers={activeCarriers}
             carriers={carriers}
             onRefresh={async () => {
               await loadCarriers();
@@ -408,6 +370,9 @@ export default function App() {
             }}
             onError={setError}
           />
+        )}
+        {tab === "historico" && (
+          <HistoricoTab activeCarriers={activeCarriers} onError={setError} />
         )}
       </main>
 
@@ -512,8 +477,81 @@ function AgendaTab({ carriers, onError }) {
     { id: "all", label: "Todos" },
   ];
 
+  const nextPayment = !loading
+    ? [...payments]
+        .filter(
+          (p) =>
+            !p.paid &&
+            p.scheduledDate >= today &&
+            Number(p.amountDue ?? 0) > 0
+        )
+        .sort((a, b) => a.scheduledDate.localeCompare(b.scheduledDate))[0]
+    : null;
+
+  const overduePayments = !loading
+    ? payments.filter(
+        (p) =>
+          !p.paid &&
+          p.scheduledDate < today &&
+          Number(p.amountDue ?? 0) > 0
+      )
+    : [];
+
+  const overdueTotal = overduePayments.reduce(
+    (s, p) => s + Number(p.amountDue ?? 0),
+    0
+  );
+
+  const fmtNumber = (n) =>
+    new Intl.NumberFormat("pt-BR", { minimumFractionDigits: 2 }).format(
+      Number(n ?? 0)
+    );
+
   return (
     <div>
+      {!loading && (overduePayments.length > 0 || nextPayment) && (
+        <div
+          className={`hero-card ${overduePayments.length > 0 ? "overdue" : "upcoming"}`}
+        >
+          {overduePayments.length > 0 ? (
+            <>
+              <div className="hero-eyebrow">Atenção</div>
+              <div className="hero-sub">
+                {overduePayments.length === 1
+                  ? "1 pagamento em atraso"
+                  : `${overduePayments.length} pagamentos em atraso`}
+              </div>
+              <div className="hero-amount danger">
+                <span className="currency">R$</span>
+                {fmtNumber(overdueTotal)}
+              </div>
+              <span className="hero-pill red">● Atrasado</span>
+            </>
+          ) : (
+            <>
+              <div className="hero-eyebrow">Próximo recebimento</div>
+              <div className="hero-sub">
+                {nextPayment.carrierName} ·{" "}
+                {getDateLabel(nextPayment.scheduledDate).date}
+              </div>
+              <div className="hero-amount">
+                <span className="currency">R$</span>
+                {fmtNumber(nextPayment.amountDue)}
+              </div>
+              <span
+                className={`hero-pill ${
+                  getDateLabel(nextPayment.scheduledDate).type === "soon"
+                    ? "orange"
+                    : "green"
+                }`}
+              >
+                ● {getDateLabel(nextPayment.scheduledDate).label}
+              </span>
+            </>
+          )}
+        </div>
+      )}
+
       <div className="agenda-filter">
         {FILTERS.map((f) => (
           <button
@@ -530,17 +568,16 @@ function AgendaTab({ carriers, onError }) {
         <div
           style={{
             background: "var(--badge-pending-bg)",
-            border: "1px solid var(--badge-pending-border)",
-            borderRadius: 8,
+            borderRadius: 10,
             padding: "10px 14px",
-            marginBottom: 12,
+            marginBottom: 14,
             fontSize: 13,
             color: "var(--badge-pending-text)",
           }}
         >
           <strong>Sem agendamento:</strong>{" "}
           {noSchedule.map((c) => c.name).join(", ")}. Configure em{" "}
-          <strong>Config → Agenda</strong> para aparecer aqui.
+          <strong>Registrar → Transportadoras</strong>.
         </div>
       )}
 
@@ -550,11 +587,9 @@ function AgendaTab({ carriers, onError }) {
         <div className="agenda-empty">
           <div style={{ fontSize: 40, marginBottom: 12 }}>📋</div>
           <div>Nenhum recebimento encontrado.</div>
-          <div
-            style={{ fontSize: 13, marginTop: 8, color: "var(--text-muted)" }}
-          >
+          <div style={{ fontSize: 13, marginTop: 8 }}>
             {noSchedule.length > 0
-              ? "Configure o agendamento das transportadoras em Config."
+              ? "Configure o agendamento das transportadoras."
               : "Nenhum pagamento pendente neste período."}
           </div>
         </div>
@@ -578,7 +613,7 @@ function AgendaTab({ carriers, onError }) {
           <div key={dateStr} className="payment-group">
             <div className="payment-group-header">
               <span className="payment-group-date">{date}</span>
-              {!allPaid && type !== "overdue" && (
+              {!allPaid && (
                 <span className={`payment-group-label ${type}`}>{label}</span>
               )}
             </div>
@@ -586,8 +621,13 @@ function AgendaTab({ carriers, onError }) {
             {items.map((p, idx) => {
               const key = `${p.carrierId}-${p.scheduledDate}-${p.periodStart}`;
               const isConfirming = confirmingId === key;
+              const statusClass = p.paid
+                ? "status-paid"
+                : type === "overdue"
+                ? "status-overdue"
+                : "status-pending";
               return (
-                <div key={idx} className="payment-item">
+                <div key={idx} className={`payment-item ${statusClass}`}>
                   <div className="payment-item-row">
                     <div>
                       <div className="payment-item-name">{p.carrierName}</div>
@@ -601,7 +641,7 @@ function AgendaTab({ carriers, onError }) {
                   </div>
                   <div className="payment-item-footer">
                     {p.paid ? (
-                      <span className="badge badge-paid">Recebido</span>
+                      <span className="badge badge-paid">✓ Recebido</span>
                     ) : type === "overdue" ? (
                       <span className="badge badge-overdue">Atrasado</span>
                     ) : (
@@ -609,11 +649,11 @@ function AgendaTab({ carriers, onError }) {
                     )}
                     {!p.paid && (
                       <button
-                        className="btn-success btn-small"
+                        className="btn-confirm"
                         disabled={isConfirming}
                         onClick={() => handleConfirm(p)}
                       >
-                        {isConfirming ? "Salvando..." : "Confirmar recebimento"}
+                        {isConfirming ? "..." : "✓ Confirmar"}
                       </button>
                     )}
                   </div>
@@ -634,37 +674,103 @@ function AgendaTab({ carriers, onError }) {
   );
 }
 
-// ─── Registrar Tab ───────────────────────────────────────────────────────────
+// ─── Currency Input ──────────────────────────────────────────────────────────
 
-function RegistrarTab({ activeCarriers, onError }) {
-  const [type, setType] = useState("route");
-
+function CurrencyInput({ value, onChange, placeholder = "0,00", required }) {
+  const handleChange = (e) => {
+    let raw = e.target.value.replace(/[^\d,]/g, "").replace(",", ".");
+    const parts = raw.split(".");
+    if (parts.length > 2) raw = parts[0] + "." + parts[1];
+    onChange(raw);
+  };
+  const display = value === "" ? "" : String(value).replace(".", ",");
   return (
-    <div>
-      <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
-        <button
-          className={`filter-chip${type === "route" ? " active" : ""}`}
-          onClick={() => setType("route")}
-        >
-          Rota
-        </button>
-        <button
-          className={`filter-chip${type === "fuel" ? " active" : ""}`}
-          onClick={() => setType("fuel")}
-        >
-          Combustível
-        </button>
-      </div>
-
-      {type === "route" && (
-        <RouteForm activeCarriers={activeCarriers} onError={onError} />
-      )}
-      {type === "fuel" && <FuelForm onError={onError} />}
+    <div className="currency-wrap">
+      <span className="currency-prefix">R$</span>
+      <input type="text" inputMode="decimal" value={display} onChange={handleChange} placeholder={placeholder} required={required} />
     </div>
   );
 }
 
-function RouteForm({ activeCarriers, onError }) {
+// ─── Registrar Tab ───────────────────────────────────────────────────────────
+
+function RegistrarTab({ activeCarriers, carriers, onRefresh, onError }) {
+  const [openSheet, setOpenSheet] = useState(null);
+
+  const TILES = [
+    { id: "route",   icon: "🚚", color: "green",  label: "Rota",            sub: "Registrar entrega" },
+    { id: "fuel",    icon: "⛽", color: "blue",   label: "Combustível",     sub: "Abastecimento" },
+    { id: "carrier", icon: "🏢", color: "orange", label: "Transportadoras", sub: "Gerenciar" },
+    { id: "pnr",     icon: "🏷️", color: "red",    label: "PNR",             sub: "Descontos" },
+  ];
+
+  const SHEET_TITLES = {
+    route:   "Registrar Rota",
+    fuel:    "Combustível",
+    carrier: "Transportadoras",
+    pnr:     "Desconto PNR",
+  };
+
+  return (
+    <div>
+      <div className="action-grid">
+        {TILES.map(({ id, icon, color, label, sub }) => (
+          <button
+            key={id}
+            className="action-tile"
+            onClick={() => setOpenSheet(id)}
+          >
+            <span className={`action-tile-icon ${color}`}>{icon}</span>
+            <span className="action-tile-label">{label}</span>
+            <span className="action-tile-sub">{sub}</span>
+          </button>
+        ))}
+      </div>
+
+      {openSheet && (
+        <div className="modal-overlay" onClick={() => setOpenSheet(null)}>
+          <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
+            <div className="sheet-handle" />
+            <div className="sheet-header">
+              <h2>{SHEET_TITLES[openSheet]}</h2>
+              <button
+                className="btn-ghost btn-small"
+                onClick={() => setOpenSheet(null)}
+              >
+                ✕
+              </button>
+            </div>
+            {openSheet === "route" && (
+              <RouteForm
+                activeCarriers={activeCarriers}
+                onError={onError}
+                onSuccess={() => setOpenSheet(null)}
+              />
+            )}
+            {openSheet === "fuel" && (
+              <FuelForm
+                onError={onError}
+                onSuccess={() => setOpenSheet(null)}
+              />
+            )}
+            {openSheet === "carrier" && (
+              <CarrierManager
+                carriers={carriers}
+                onRefresh={onRefresh}
+                onError={onError}
+              />
+            )}
+            {openSheet === "pnr" && (
+              <DiscountRegistrar onError={onError} />
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function RouteForm({ activeCarriers, onError, onSuccess }) {
   const lastCarrierId = localStorage.getItem("lastCarrierId") || "";
   const [form, setForm] = useState({
     carrierId: lastCarrierId,
@@ -673,17 +779,43 @@ function RouteForm({ activeCarriers, onError }) {
     amountPerPackage: "",
     packageCount: "",
     notes: "",
+    packageMode: "fixed",
+    packageValues: [""],
   });
   const [saving, setSaving] = useState(false);
   const [success, setSuccess] = useState(false);
 
   const set = (key, value) => setForm((prev) => ({ ...prev, [key]: value }));
 
+  const setPackageValue = (idx, value) =>
+    setForm((prev) => {
+      const next = [...prev.packageValues];
+      next[idx] = value;
+      return { ...prev, packageValues: next };
+    });
+
+  const addPackage = () =>
+    setForm((prev) => ({ ...prev, packageValues: [...prev.packageValues, ""] }));
+
+  const removePackage = (idx) =>
+    setForm((prev) => ({
+      ...prev,
+      packageValues: prev.packageValues.filter((_, i) => i !== idx),
+    }));
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setSaving(true);
     setSuccess(false);
     try {
+      const isCustom = form.packageMode === "custom";
+      const cleanValues = form.packageValues
+        .map((v) => Number(v))
+        .filter((v) => v > 0);
+      if (isCustom && cleanValues.length === 0) {
+        onError("Adicione pelo menos um valor de pacote.");
+        return;
+      }
       await request("/routes", {
         method: "POST",
         body: JSON.stringify({
@@ -692,8 +824,13 @@ function RouteForm({ activeCarriers, onError }) {
           fixedAmount:
             form.fixedAmount === "" ? null : Number(form.fixedAmount),
           amountPerPackage:
-            form.amountPerPackage === "" ? null : Number(form.amountPerPackage),
-          packageCount: Number(form.packageCount || 0),
+            isCustom || form.amountPerPackage === ""
+              ? null
+              : Number(form.amountPerPackage),
+          packageCount: isCustom
+            ? cleanValues.length
+            : Number(form.packageCount || 0),
+          packageValues: isCustom ? cleanValues : null,
           notes: form.notes || null,
         }),
       });
@@ -705,9 +842,15 @@ function RouteForm({ activeCarriers, onError }) {
         amountPerPackage: "",
         packageCount: "",
         notes: "",
+        packageMode: "fixed",
+        packageValues: [""],
       }));
-      setSuccess(true);
-      setTimeout(() => setSuccess(false), 3000);
+      if (onSuccess) {
+        onSuccess();
+      } else {
+        setSuccess(true);
+        setTimeout(() => setSuccess(false), 3000);
+      }
     } catch (err) {
       onError(err.message);
     } finally {
@@ -717,6 +860,11 @@ function RouteForm({ activeCarriers, onError }) {
 
   const previewTotal = (() => {
     const fixo = Number(form.fixedAmount || 0);
+    if (form.packageMode === "custom") {
+      const soma = form.packageValues.reduce((s, v) => s + Number(v || 0), 0);
+      const total = fixo + soma;
+      return total > 0 ? fmt(total) : null;
+    }
     const porPacote = Number(form.amountPerPackage || 0);
     const qtd = Number(form.packageCount || 0);
     const total = fixo + porPacote * qtd;
@@ -732,21 +880,26 @@ function RouteForm({ activeCarriers, onError }) {
       <form onSubmit={handleSubmit}>
         <div className="card">
           <div className="form-group">
-            <label>
-              Transportadora
-              <select
-                value={form.carrierId}
-                onChange={(e) => set("carrierId", e.target.value)}
-                required
-              >
-                <option value="">Selecione...</option>
-                {activeCarriers.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <label>Transportadora</label>
+            <div className="carrier-chips">
+              {activeCarriers.map((c) => (
+                <button
+                  key={c.id}
+                  type="button"
+                  className={`carrier-chip${
+                    form.carrierId === String(c.id) ? " active" : ""
+                  }`}
+                  onClick={() => set("carrierId", String(c.id))}
+                >
+                  {c.name}
+                </button>
+              ))}
+              {activeCarriers.length === 0 && (
+                <span style={{ fontSize: 13, color: "var(--text-muted)" }}>
+                  Nenhuma transportadora ativa.
+                </span>
+              )}
+            </div>
           </div>
 
           <div className="form-group">
@@ -763,68 +916,94 @@ function RouteForm({ activeCarriers, onError }) {
 
           <hr className="divider" />
 
-          <div className="form-row">
-            <div className="form-group">
-              <label>
-                Valor fixo (R$)
-                <input
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  placeholder="0,00"
-                  value={form.fixedAmount}
-                  onChange={(e) => set("fixedAmount", e.target.value)}
-                />
-              </label>
-            </div>
-            <div className="form-group">
-              <label>
-                Valor/pacote (R$)
-                <input
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  placeholder="0,00"
-                  value={form.amountPerPackage}
-                  onChange={(e) => set("amountPerPackage", e.target.value)}
-                />
-              </label>
-            </div>
+          <div className="form-group">
+            <label>
+              Valor fixo (R$)
+              <CurrencyInput value={form.fixedAmount} onChange={(v) => set("fixedAmount", v)} />
+            </label>
           </div>
 
-          {form.amountPerPackage !== "" &&
-            Number(form.amountPerPackage) > 0 && (
+          <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+            <button
+              type="button"
+              className={`filter-chip${
+                form.packageMode === "fixed" ? " active" : ""
+              }`}
+              onClick={() => set("packageMode", "fixed")}
+            >
+              Mesmo valor/pacote
+            </button>
+            <button
+              type="button"
+              className={`filter-chip${
+                form.packageMode === "custom" ? " active" : ""
+              }`}
+              onClick={() => set("packageMode", "custom")}
+            >
+              Valores diferentes
+            </button>
+          </div>
+
+          {form.packageMode === "fixed" ? (
+            <>
               <div className="form-group">
                 <label>
-                  Qtde de pacotes
-                  <input
-                    type="number"
-                    min="1"
-                    placeholder="0"
-                    value={form.packageCount}
-                    onChange={(e) => set("packageCount", e.target.value)}
-                    required
-                  />
+                  Valor/pacote (R$)
+                  <CurrencyInput value={form.amountPerPackage} onChange={(v) => set("amountPerPackage", v)} />
                 </label>
               </div>
-            )}
+              {form.amountPerPackage !== "" &&
+                Number(form.amountPerPackage) > 0 && (
+                  <div className="form-group">
+                    <label>
+                      Qtde de pacotes
+                      <input
+                        type="number"
+                        min="1"
+                        placeholder="0"
+                        value={form.packageCount}
+                        onChange={(e) => set("packageCount", e.target.value)}
+                        required
+                      />
+                    </label>
+                  </div>
+                )}
+            </>
+          ) : (
+            <div className="form-group">
+              <label>Valor de cada pacote (R$)</label>
+              {form.packageValues.map((v, idx) => (
+                <div
+                  key={idx}
+                  style={{ display: "flex", gap: 8, marginBottom: 8 }}
+                >
+                  <CurrencyInput value={v} onChange={(val) => setPackageValue(idx, val)} placeholder={`Pacote ${idx + 1}`} />
+                  {form.packageValues.length > 1 && (
+                    <button
+                      type="button"
+                      className="btn-ghost btn-small"
+                      onClick={() => removePackage(idx)}
+                      style={{ flexShrink: 0 }}
+                    >
+                      ✕
+                    </button>
+                  )}
+                </div>
+              ))}
+              <button
+                type="button"
+                className="btn-ghost btn-small"
+                onClick={addPackage}
+              >
+                + Adicionar pacote
+              </button>
+            </div>
+          )}
 
           {previewTotal && (
-            <div
-              style={{
-                background: "var(--bg-secondary)",
-                borderRadius: 8,
-                padding: "10px 14px",
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-                marginTop: 4,
-              }}
-            >
-              <span style={{ fontSize: 14, color: "var(--text-secondary)" }}>
-                Total desta rota
-              </span>
-              <strong style={{ fontSize: 18 }}>{previewTotal}</strong>
+            <div className="preview-total">
+              <span className="preview-total-label">Total desta rota</span>
+              <strong className="preview-total-value">{previewTotal}</strong>
             </div>
           )}
 
@@ -852,7 +1031,7 @@ function RouteForm({ activeCarriers, onError }) {
   );
 }
 
-function FuelForm({ onError }) {
+function FuelForm({ onError, onSuccess }) {
   const [form, setForm] = useState({
     entryDate: todayStr(),
     fuelType: "gasoline",
@@ -887,8 +1066,12 @@ function FuelForm({ onError }) {
         totalCost: "",
         notes: "",
       });
-      setSuccess(true);
-      setTimeout(() => setSuccess(false), 3000);
+      if (onSuccess) {
+        onSuccess();
+      } else {
+        setSuccess(true);
+        setTimeout(() => setSuccess(false), 3000);
+      }
     } catch (err) {
       onError(err.message);
     } finally {
@@ -940,48 +1123,27 @@ function FuelForm({ onError }) {
             <div className="form-group">
               <label>
                 Valor total (R$)
-                <input
-                  type="number"
-                  step="0.01"
-                  min="0.01"
-                  placeholder="0,00"
-                  value={form.totalCost}
-                  onChange={(e) => set("totalCost", e.target.value)}
-                  required
-                />
+                <CurrencyInput value={form.totalCost} onChange={(v) => set("totalCost", v)} required />
               </label>
             </div>
             <div className="form-group">
               <label>
                 Litros (opcional)
                 <input
-                  type="number"
-                  step="0.001"
-                  min="0.001"
+                  type="text"
+                  inputMode="decimal"
                   placeholder="0,000"
                   value={form.liters}
-                  onChange={(e) => set("liters", e.target.value)}
+                  onChange={(e) => set("liters", e.target.value.replace(/[^\d.,]/g, ""))}
                 />
               </label>
             </div>
           </div>
 
           {pricePerLiter && (
-            <div
-              style={{
-                background: "var(--bg-secondary)",
-                borderRadius: 8,
-                padding: "10px 14px",
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-                marginTop: 4,
-              }}
-            >
-              <span style={{ fontSize: 14, color: "var(--text-secondary)" }}>
-                Preço/litro
-              </span>
-              <strong style={{ fontSize: 18 }}>R$ {pricePerLiter}</strong>
+            <div className="preview-total">
+              <span className="preview-total-label">Preço/litro</span>
+              <strong className="preview-total-value">R$ {pricePerLiter}</strong>
             </div>
           )}
 
@@ -1004,6 +1166,290 @@ function FuelForm({ onError }) {
         <button type="submit" className="btn-full" disabled={saving}>
           {saving ? "Salvando..." : "Registrar Combustível"}
         </button>
+      </form>
+    </div>
+  );
+}
+
+// ─── Carrier Manager ─────────────────────────────────────────────────────────
+
+function CarrierManager({ carriers, onRefresh, onError }) {
+  const [showAddCarrier, setShowAddCarrier] = useState(false);
+  const [showScheduleModal, setShowScheduleModal] = useState(null);
+  const [carrierForm, setCarrierForm] = useState({ name: "" });
+  const [scheduleForm, setScheduleForm] = useState({ frequency: "", weekday: "", dayOfMonth: "", weekStartDay: "" });
+  const [saving, setSaving] = useState(false);
+  const [deletingCarrierId, setDeletingCarrierId] = useState(null);
+  const [carrierError, setCarrierError] = useState("");
+
+  const openSchedule = async (c) => {
+    try {
+      const s = await request(`/carriers/${c.id}/payment-schedule`);
+      setScheduleForm({
+        frequency: s.frequency || "",
+        weekday: s.weekday != null ? String(s.weekday) : "",
+        dayOfMonth: s.dayOfMonth != null ? String(s.dayOfMonth) : "",
+        weekStartDay: s.weekStartDay != null ? String(s.weekStartDay) : "",
+      });
+    } catch {
+      setScheduleForm({ frequency: "", weekday: "", dayOfMonth: "", weekStartDay: "" });
+    }
+    setShowScheduleModal(c);
+  };
+
+  const handleCreateCarrier = async (e) => {
+    e.preventDefault();
+    setSaving(true);
+    setCarrierError("");
+    try {
+      await request("/carriers", { method: "POST", body: JSON.stringify({ name: carrierForm.name }) });
+      setCarrierForm({ name: "" });
+      setShowAddCarrier(false);
+      await onRefresh();
+    } catch (err) {
+      setCarrierError(err.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleSaveSchedule = async (e) => {
+    e.preventDefault();
+    setSaving(true);
+    try {
+      const body = {
+        frequency: scheduleForm.frequency,
+        weekday: scheduleForm.frequency === "weekly" && scheduleForm.weekday !== "" ? Number(scheduleForm.weekday) : null,
+        dayOfMonth: scheduleForm.frequency === "quinzena" && scheduleForm.dayOfMonth !== "" ? Number(scheduleForm.dayOfMonth) : null,
+        weekStartDay: scheduleForm.frequency === "weekly" && scheduleForm.weekStartDay !== "" ? Number(scheduleForm.weekStartDay) : null,
+      };
+      await request(`/carriers/${showScheduleModal.id}/payment-schedule`, { method: "PUT", body: JSON.stringify(body) });
+      setShowScheduleModal(null);
+      await onRefresh();
+    } catch (err) {
+      onError(err.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleToggleCarrier = async (c) => {
+    try {
+      const action = c.isActive ? "deactivate" : "reactivate";
+      await request(`/carriers/${c.id}/${action}`, { method: "PATCH" });
+      await onRefresh();
+    } catch (err) {
+      onError(err.message);
+    }
+  };
+
+  const handleDeleteCarrier = async (c) => {
+    try {
+      await request(`/carriers/${c.id}`, { method: "DELETE" });
+      setDeletingCarrierId(null);
+      await onRefresh();
+    } catch (err) {
+      setDeletingCarrierId(null);
+      onError(err.message);
+    }
+  };
+
+  return (
+    <div>
+      <div className="card">
+        {carriers.map((c) => (
+          <div key={c.id} className="carrier-item">
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div className="carrier-name">{c.name}</div>
+              <div className="carrier-meta">
+                {c.isActive ? "Ativa" : "Inativa"}
+                {c.paymentSchedule && ` • ${scheduleLabel(c.paymentSchedule)}`}
+              </div>
+            </div>
+            {deletingCarrierId === c.id ? (
+              <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-end" }}>
+                <span style={{ fontSize: 13, color: "var(--text-secondary)" }}>Excluir "{c.name}"?</span>
+                <div style={{ display: "flex", gap: 6 }}>
+                  <button className="btn-danger btn-small" onClick={() => handleDeleteCarrier(c)}>Confirmar</button>
+                  <button className="btn-ghost btn-small" onClick={() => setDeletingCarrierId(null)}>Cancelar</button>
+                </div>
+              </div>
+            ) : (
+              <div className="carrier-actions">
+                <button className="btn-ghost btn-small" onClick={() => openSchedule(c)}>Agenda</button>
+                <button className={`btn-small ${c.isActive ? "btn-danger" : "btn-success"}`} onClick={() => handleToggleCarrier(c)}>
+                  {c.isActive ? "Inativar" : "Reativar"}
+                </button>
+                <button className="btn-ghost btn-small" onClick={() => setDeletingCarrierId(c.id)} title="Excluir">🗑</button>
+              </div>
+            )}
+          </div>
+        ))}
+        {!showAddCarrier ? (
+          <button className="btn-ghost btn-small" style={{ marginTop: 8 }} onClick={() => setShowAddCarrier(true)}>+ Adicionar transportadora</button>
+        ) : (
+          <form onSubmit={handleCreateCarrier} style={{ marginTop: 12 }}>
+            <div style={{ display: "flex", gap: 8 }}>
+              <input
+                value={carrierForm.name}
+                onChange={(e) => { setCarrierForm({ name: e.target.value }); setCarrierError(""); }}
+                placeholder="Nome da transportadora"
+                required
+                autoFocus
+                style={carrierError ? { borderColor: "var(--badge-overdue-border, #c0392b)" } : undefined}
+              />
+              <button type="submit" disabled={saving} style={{ whiteSpace: "nowrap", flexShrink: 0 }}>{saving ? "..." : "Salvar"}</button>
+              <button type="button" className="btn-ghost" onClick={() => { setShowAddCarrier(false); setCarrierError(""); }} style={{ flexShrink: 0 }}>✕</button>
+            </div>
+            {carrierError && <p style={{ margin: "6px 0 0", fontSize: 13, color: "var(--badge-overdue-text, #e74c3c)" }}>{carrierError}</p>}
+          </form>
+        )}
+      </div>
+
+      {showScheduleModal && (
+        <div className="modal-overlay">
+          <div className="modal-sheet">
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+              <h2 style={{ margin: 0, fontSize: 18 }}>Agendamento — {showScheduleModal.name}</h2>
+              <button className="btn-ghost btn-small" onClick={() => setShowScheduleModal(null)}>✕</button>
+            </div>
+            <form onSubmit={handleSaveSchedule}>
+              <div className="form-group">
+                <label>
+                  Tipo de pagamento
+                  <select value={scheduleForm.frequency} onChange={(e) => setScheduleForm((p) => ({ ...p, frequency: e.target.value }))} required>
+                    <option value="">Selecione...</option>
+                    <option value="weekly">Semanal (toda semana)</option>
+                    <option value="quinzena">Quinzenal (dia 15 / fim do mês)</option>
+                  </select>
+                </label>
+              </div>
+              {scheduleForm.frequency === "weekly" && (
+                <>
+                  <div className="form-group">
+                    <label>
+                      Dia do pagamento
+                      <select value={scheduleForm.weekday} onChange={(e) => setScheduleForm((p) => ({ ...p, weekday: e.target.value }))} required>
+                        <option value="">Selecione...</option>
+                        {WEEKDAY_FULL.map((d, i) => <option key={i} value={i}>{d}</option>)}
+                      </select>
+                    </label>
+                  </div>
+                  <div className="form-group">
+                    <label>
+                      Dia que a semana começa (opcional)
+                      <select value={scheduleForm.weekStartDay} onChange={(e) => setScheduleForm((p) => ({ ...p, weekStartDay: e.target.value }))}>
+                        <option value="">Padrão (semana começa no sábado)</option>
+                        {WEEKDAY_FULL.map((d, i) => <option key={i} value={i}>{d}</option>)}
+                      </select>
+                    </label>
+                  </div>
+                  {scheduleForm.weekday !== "" && (
+                    <div style={{ background: "var(--bg-secondary)", borderRadius: 8, padding: "10px 14px", fontSize: 13, color: "var(--text-secondary)", marginBottom: 14 }}>
+                      {scheduleForm.weekStartDay !== ""
+                        ? `Semana de ${WEEKDAY_FULL[scheduleForm.weekStartDay]} a ${WEEKDAY_FULL[(Number(scheduleForm.weekStartDay) - 1 + 7) % 7]}, recebe toda ${WEEKDAY_FULL[scheduleForm.weekday]}.`
+                        : `Recebe toda ${WEEKDAY_FULL[scheduleForm.weekday]}.`}
+                    </div>
+                  )}
+                </>
+              )}
+              {scheduleForm.frequency === "quinzena" && (
+                <div className="form-group">
+                  <label>
+                    Dia do mês
+                    <input type="number" min="1" max="31" placeholder="Ex: 15" value={scheduleForm.dayOfMonth} onChange={(e) => setScheduleForm((p) => ({ ...p, dayOfMonth: e.target.value }))} required />
+                  </label>
+                  <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 4 }}>
+                    Pagamento no dia {scheduleForm.dayOfMonth || "?"} e no último dia do mês.
+                  </div>
+                </div>
+              )}
+              <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                <button type="submit" className="btn-full" disabled={saving}>{saving ? "Salvando..." : "Salvar agendamento"}</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Discount Registrar ───────────────────────────────────────────────────────
+
+function DiscountRegistrar({ onError }) {
+  const [discountForm, setDiscountForm] = useState({ routeId: "", discountDate: todayStr(), discountAmount: "", notes: "" });
+  const [routes, setRoutes] = useState([]);
+  const [saving, setSaving] = useState(false);
+  const [success, setSuccess] = useState(false);
+
+  useEffect(() => {
+    request("/routes")
+      .then(setRoutes)
+      .catch((e) => onError(e.message));
+  }, [onError]);
+
+  const handleCreateDiscount = async (e) => {
+    e.preventDefault();
+    setSaving(true);
+    try {
+      await request("/discounts", {
+        method: "POST",
+        body: JSON.stringify({
+          routeId: Number(discountForm.routeId),
+          discountDate: discountForm.discountDate,
+          discountAmount: Number(discountForm.discountAmount),
+          notes: discountForm.notes || null,
+        }),
+      });
+      setDiscountForm({ routeId: "", discountDate: todayStr(), discountAmount: "", notes: "" });
+      setSuccess(true);
+      setTimeout(() => setSuccess(false), 3000);
+    } catch (err) {
+      onError(err.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div>
+      {success && <div className="success-msg">PNR registrado com sucesso!</div>}
+      <form onSubmit={handleCreateDiscount}>
+        <div className="card">
+          <div className="form-group">
+            <label>
+              Rota
+              <select value={discountForm.routeId} onChange={(e) => setDiscountForm((p) => ({ ...p, routeId: e.target.value }))} required>
+                <option value="">Selecione a rota...</option>
+                {routes.map((r) => (
+                  <option key={r.id} value={r.id}>#{r.id} — {r.carrierName} ({fmtDate(r.routeDate)}) {fmt(r.totalAmount)}</option>
+                ))}
+              </select>
+            </label>
+          </div>
+          <div className="form-row">
+            <div className="form-group">
+              <label>
+                Data do PNR
+                <input type="date" value={discountForm.discountDate} onChange={(e) => setDiscountForm((p) => ({ ...p, discountDate: e.target.value }))} required />
+              </label>
+            </div>
+            <div className="form-group">
+              <label>
+                Valor (R$)
+                <CurrencyInput value={discountForm.discountAmount} onChange={(v) => setDiscountForm((p) => ({ ...p, discountAmount: v }))} required />
+              </label>
+            </div>
+          </div>
+          <div className="form-group">
+            <label>
+              Observação (opcional)
+              <input value={discountForm.notes} onChange={(e) => setDiscountForm((p) => ({ ...p, notes: e.target.value }))} placeholder="Ex: pacote danificado" />
+            </label>
+          </div>
+        </div>
+        <button type="submit" className="btn-full" disabled={saving}>{saving ? "Salvando..." : "Registrar PNR"}</button>
       </form>
     </div>
   );
@@ -1206,11 +1652,9 @@ function HistoricoTab({ activeCarriers, onError }) {
                 -{fmt(summary.totalFuel)}
               </strong>
             </div>
-            <div className="metric-card" style={{ gridColumn: "span 2" }}>
+            <div className="metric-card highlight" style={{ gridColumn: "span 2" }}>
               <span>Ganho Real</span>
-              <strong style={{ fontSize: "1.1em" }}>
-                {fmt(summary.realEarnings)}
-              </strong>
+              <strong>{fmt(summary.realEarnings)}</strong>
             </div>
           </div>
 
@@ -1243,6 +1687,9 @@ function HistoricoTab({ activeCarriers, onError }) {
                   <div className="route-item-meta">
                     {fmtDate(r.routeDate)}
                     {r.packageCount > 0 ? ` • ${r.packageCount} pct` : ""}
+                    {r.packageValues && r.packageValues.length > 0
+                      ? ` • ${r.packageValues.map((v) => fmt(v)).join(", ")}`
+                      : ""}
                     {r.totalDiscounts > 0
                       ? ` • PNR ${fmt(r.totalDiscounts)}`
                       : ""}
@@ -1356,6 +1803,7 @@ function HistoricoTab({ activeCarriers, onError }) {
 }
 
 function EditRouteModal({ route, activeCarriers, onClose, onSaved, onError }) {
+  const hasCustom = route.packageValues && route.packageValues.length > 0;
   const [form, setForm] = useState({
     carrierId: String(route.carrierId),
     routeDate: route.routeDate,
@@ -1364,12 +1812,35 @@ function EditRouteModal({ route, activeCarriers, onClose, onSaved, onError }) {
       route.amountPerPackage != null ? String(route.amountPerPackage) : "",
     packageCount: route.packageCount > 0 ? String(route.packageCount) : "",
     notes: route.notes || "",
+    packageMode: hasCustom ? "custom" : "fixed",
+    packageValues: hasCustom ? route.packageValues.map((v) => String(v)) : [""],
   });
   const [saving, setSaving] = useState(false);
   const set = (k, v) => setForm((p) => ({ ...p, [k]: v }));
 
+  const setPackageValue = (idx, value) =>
+    setForm((p) => {
+      const next = [...p.packageValues];
+      next[idx] = value;
+      return { ...p, packageValues: next };
+    });
+
+  const addPackage = () =>
+    setForm((p) => ({ ...p, packageValues: [...p.packageValues, ""] }));
+
+  const removePackage = (idx) =>
+    setForm((p) => ({
+      ...p,
+      packageValues: p.packageValues.filter((_, i) => i !== idx),
+    }));
+
   const previewTotal = (() => {
     const fixo = Number(form.fixedAmount || 0);
+    if (form.packageMode === "custom") {
+      const soma = form.packageValues.reduce((s, v) => s + Number(v || 0), 0);
+      const total = fixo + soma;
+      return total > 0 ? fmt(total) : null;
+    }
     const porPacote = Number(form.amountPerPackage || 0);
     const qtd = Number(form.packageCount || 0);
     const total = fixo + porPacote * qtd;
@@ -1380,6 +1851,14 @@ function EditRouteModal({ route, activeCarriers, onClose, onSaved, onError }) {
     e.preventDefault();
     setSaving(true);
     try {
+      const isCustom = form.packageMode === "custom";
+      const cleanValues = form.packageValues
+        .map((v) => Number(v))
+        .filter((v) => v > 0);
+      if (isCustom && cleanValues.length === 0) {
+        onError("Adicione pelo menos um valor de pacote.");
+        return;
+      }
       await request(`/routes/${route.id}`, {
         method: "PUT",
         body: JSON.stringify({
@@ -1388,8 +1867,13 @@ function EditRouteModal({ route, activeCarriers, onClose, onSaved, onError }) {
           fixedAmount:
             form.fixedAmount === "" ? null : Number(form.fixedAmount),
           amountPerPackage:
-            form.amountPerPackage === "" ? null : Number(form.amountPerPackage),
-          packageCount: Number(form.packageCount || 0),
+            isCustom || form.amountPerPackage === ""
+              ? null
+              : Number(form.amountPerPackage),
+          packageCount: isCustom
+            ? cleanValues.length
+            : Number(form.packageCount || 0),
+          packageValues: isCustom ? cleanValues : null,
           notes: form.notes || null,
         }),
       });
@@ -1446,49 +1930,86 @@ function EditRouteModal({ route, activeCarriers, onClose, onSaved, onError }) {
               />
             </label>
           </div>
-          <div className="form-row">
-            <div className="form-group">
-              <label>
-                Valor fixo (R$)
-                <input
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  placeholder="0,00"
-                  value={form.fixedAmount}
-                  onChange={(e) => set("fixedAmount", e.target.value)}
-                />
-              </label>
-            </div>
-            <div className="form-group">
-              <label>
-                Valor/pacote (R$)
-                <input
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  placeholder="0,00"
-                  value={form.amountPerPackage}
-                  onChange={(e) => set("amountPerPackage", e.target.value)}
-                />
-              </label>
-            </div>
+          <div className="form-group">
+            <label>
+              Valor fixo (R$)
+              <CurrencyInput value={form.fixedAmount} onChange={(v) => set("fixedAmount", v)} />
+            </label>
           </div>
-          {form.amountPerPackage !== "" &&
-            Number(form.amountPerPackage) > 0 && (
+          <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+            <button
+              type="button"
+              className={`filter-chip${
+                form.packageMode === "fixed" ? " active" : ""
+              }`}
+              onClick={() => set("packageMode", "fixed")}
+            >
+              Mesmo valor/pacote
+            </button>
+            <button
+              type="button"
+              className={`filter-chip${
+                form.packageMode === "custom" ? " active" : ""
+              }`}
+              onClick={() => set("packageMode", "custom")}
+            >
+              Valores diferentes
+            </button>
+          </div>
+          {form.packageMode === "fixed" ? (
+            <>
               <div className="form-group">
                 <label>
-                  Qtde de pacotes
-                  <input
-                    type="number"
-                    min="1"
-                    value={form.packageCount}
-                    onChange={(e) => set("packageCount", e.target.value)}
-                    required
-                  />
+                  Valor/pacote (R$)
+                  <CurrencyInput value={form.amountPerPackage} onChange={(v) => set("amountPerPackage", v)} />
                 </label>
               </div>
-            )}
+              {form.amountPerPackage !== "" &&
+                Number(form.amountPerPackage) > 0 && (
+                  <div className="form-group">
+                    <label>
+                      Qtde de pacotes
+                      <input
+                        type="number"
+                        min="1"
+                        value={form.packageCount}
+                        onChange={(e) => set("packageCount", e.target.value)}
+                        required
+                      />
+                    </label>
+                  </div>
+                )}
+            </>
+          ) : (
+            <div className="form-group">
+              <label>Valor de cada pacote (R$)</label>
+              {form.packageValues.map((v, idx) => (
+                <div
+                  key={idx}
+                  style={{ display: "flex", gap: 8, marginBottom: 8 }}
+                >
+                  <CurrencyInput value={v} onChange={(val) => setPackageValue(idx, val)} placeholder={`Pacote ${idx + 1}`} />
+                  {form.packageValues.length > 1 && (
+                    <button
+                      type="button"
+                      className="btn-ghost btn-small"
+                      onClick={() => removePackage(idx)}
+                      style={{ flexShrink: 0 }}
+                    >
+                      ✕
+                    </button>
+                  )}
+                </div>
+              ))}
+              <button
+                type="button"
+                className="btn-ghost btn-small"
+                onClick={addPackage}
+              >
+                + Adicionar pacote
+              </button>
+            </div>
+          )}
           {previewTotal && (
             <div
               style={{
@@ -1529,541 +2050,3 @@ function EditRouteModal({ route, activeCarriers, onClose, onSaved, onError }) {
   );
 }
 
-// ─── Config Tab ──────────────────────────────────────────────────────────────
-
-function ConfigTab({ carriers, onRefresh, onError }) {
-  const [showAddCarrier, setShowAddCarrier] = useState(false);
-  const [showPnr, setShowPnr] = useState(false);
-  const [showScheduleModal, setShowScheduleModal] = useState(null);
-  const [carrierForm, setCarrierForm] = useState({ name: "" });
-  const [discountForm, setDiscountForm] = useState({
-    routeId: "",
-    discountDate: todayStr(),
-    discountAmount: "",
-    notes: "",
-  });
-  const [scheduleForm, setScheduleForm] = useState({
-    frequency: "",
-    weekday: "",
-    dayOfMonth: "",
-    weekStartDay: "",
-  });
-  const [routes, setRoutes] = useState([]);
-  const [saving, setSaving] = useState(false);
-  const [deletingCarrierId, setDeletingCarrierId] = useState(null);
-  const [carrierError, setCarrierError] = useState("");
-
-  useEffect(() => {
-    if (showPnr && routes.length === 0) {
-      request("/routes")
-        .then(setRoutes)
-        .catch((e) => onError(e.message));
-    }
-  }, [showPnr, routes.length, onError]);
-
-  const openSchedule = async (c) => {
-    try {
-      const s = await request(`/carriers/${c.id}/payment-schedule`);
-      setScheduleForm({
-        frequency: s.frequency || "",
-        weekday: s.weekday != null ? String(s.weekday) : "",
-        dayOfMonth: s.dayOfMonth != null ? String(s.dayOfMonth) : "",
-        weekStartDay: s.weekStartDay != null ? String(s.weekStartDay) : "",
-      });
-    } catch {
-      setScheduleForm({
-        frequency: "",
-        weekday: "",
-        dayOfMonth: "",
-        weekStartDay: "",
-      });
-    }
-    setShowScheduleModal(c);
-  };
-
-  const handleCreateCarrier = async (e) => {
-    e.preventDefault();
-    setSaving(true);
-    setCarrierError("");
-    try {
-      await request("/carriers", {
-        method: "POST",
-        body: JSON.stringify({ name: carrierForm.name }),
-      });
-      setCarrierForm({ name: "" });
-      setShowAddCarrier(false);
-      await onRefresh();
-    } catch (err) {
-      setCarrierError(err.message);
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const handleSaveSchedule = async (e) => {
-    e.preventDefault();
-    setSaving(true);
-    try {
-      const body = {
-        frequency: scheduleForm.frequency,
-        weekday:
-          scheduleForm.frequency === "weekly" && scheduleForm.weekday !== ""
-            ? Number(scheduleForm.weekday)
-            : null,
-        dayOfMonth:
-          scheduleForm.frequency === "quinzena" &&
-          scheduleForm.dayOfMonth !== ""
-            ? Number(scheduleForm.dayOfMonth)
-            : null,
-        weekStartDay:
-          scheduleForm.frequency === "weekly" &&
-          scheduleForm.weekStartDay !== ""
-            ? Number(scheduleForm.weekStartDay)
-            : null,
-      };
-      await request(`/carriers/${showScheduleModal.id}/payment-schedule`, {
-        method: "PUT",
-        body: JSON.stringify(body),
-      });
-      setShowScheduleModal(null);
-      await onRefresh();
-    } catch (err) {
-      onError(err.message);
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const handleCreateDiscount = async (e) => {
-    e.preventDefault();
-    setSaving(true);
-    try {
-      await request("/discounts", {
-        method: "POST",
-        body: JSON.stringify({
-          routeId: Number(discountForm.routeId),
-          discountDate: discountForm.discountDate,
-          discountAmount: Number(discountForm.discountAmount),
-          notes: discountForm.notes || null,
-        }),
-      });
-      setDiscountForm({
-        routeId: "",
-        discountDate: todayStr(),
-        discountAmount: "",
-        notes: "",
-      });
-      setShowPnr(false);
-    } catch (err) {
-      onError(err.message);
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const handleToggleCarrier = async (c) => {
-    try {
-      const action = c.isActive ? "deactivate" : "reactivate";
-      await request(`/carriers/${c.id}/${action}`, { method: "PATCH" });
-      await onRefresh();
-    } catch (err) {
-      onError(err.message);
-    }
-  };
-
-  const handleDeleteCarrier = async (c) => {
-    try {
-      await request(`/carriers/${c.id}`, { method: "DELETE" });
-      setDeletingCarrierId(null);
-      await onRefresh();
-    } catch (err) {
-      setDeletingCarrierId(null);
-      onError(err.message);
-    }
-  };
-
-  return (
-    <div>
-      <p className="section-title">Transportadoras</p>
-      <div className="card">
-        {carriers.map((c) => (
-          <div key={c.id} className="carrier-item">
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div className="carrier-name">{c.name}</div>
-              <div className="carrier-meta">
-                {c.isActive ? "Ativa" : "Inativa"}
-                {c.paymentSchedule && ` • ${scheduleLabel(c.paymentSchedule)}`}
-              </div>
-            </div>
-            {deletingCarrierId === c.id ? (
-              <div
-                style={{
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: 6,
-                  alignItems: "flex-end",
-                }}
-              >
-                <span style={{ fontSize: 13, color: "var(--text-secondary)" }}>
-                  Excluir "{c.name}"?
-                </span>
-                <div style={{ display: "flex", gap: 6 }}>
-                  <button
-                    className="btn-danger btn-small"
-                    onClick={() => handleDeleteCarrier(c)}
-                  >
-                    Confirmar
-                  </button>
-                  <button
-                    className="btn-ghost btn-small"
-                    onClick={() => setDeletingCarrierId(null)}
-                  >
-                    Cancelar
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <div className="carrier-actions">
-                <button
-                  className="btn-ghost btn-small"
-                  onClick={() => openSchedule(c)}
-                >
-                  Agenda
-                </button>
-                <button
-                  className={`btn-small ${
-                    c.isActive ? "btn-danger" : "btn-success"
-                  }`}
-                  onClick={() => handleToggleCarrier(c)}
-                >
-                  {c.isActive ? "Inativar" : "Reativar"}
-                </button>
-                <button
-                  className="btn-ghost btn-small"
-                  onClick={() => setDeletingCarrierId(c.id)}
-                  title="Excluir"
-                >
-                  🗑
-                </button>
-              </div>
-            )}
-          </div>
-        ))}
-
-        {!showAddCarrier ? (
-          <button
-            className="btn-ghost btn-small"
-            style={{ marginTop: 8 }}
-            onClick={() => setShowAddCarrier(true)}
-          >
-            + Adicionar transportadora
-          </button>
-        ) : (
-          <form onSubmit={handleCreateCarrier} style={{ marginTop: 12 }}>
-            <div style={{ display: "flex", gap: 8 }}>
-              <input
-                value={carrierForm.name}
-                onChange={(e) => {
-                  setCarrierForm({ name: e.target.value });
-                  setCarrierError("");
-                }}
-                placeholder="Nome da transportadora"
-                required
-                autoFocus
-                style={
-                  carrierError
-                    ? { borderColor: "var(--badge-overdue-border, #c0392b)" }
-                    : undefined
-                }
-              />
-              <button
-                type="submit"
-                disabled={saving}
-                style={{ whiteSpace: "nowrap", flexShrink: 0 }}
-              >
-                {saving ? "..." : "Salvar"}
-              </button>
-              <button
-                type="button"
-                className="btn-ghost"
-                onClick={() => {
-                  setShowAddCarrier(false);
-                  setCarrierError("");
-                }}
-                style={{ flexShrink: 0 }}
-              >
-                ✕
-              </button>
-            </div>
-            {carrierError && (
-              <p
-                style={{
-                  margin: "6px 0 0",
-                  fontSize: 13,
-                  color: "var(--badge-overdue-text, #e74c3c)",
-                }}
-              >
-                {carrierError}
-              </p>
-            )}
-          </form>
-        )}
-      </div>
-
-      <p className="section-title">Desconto / PNR</p>
-      <div className="card">
-        {!showPnr ? (
-          <button
-            className="btn-ghost btn-full"
-            onClick={() => setShowPnr(true)}
-          >
-            Registrar desconto (PNR)
-          </button>
-        ) : (
-          <form onSubmit={handleCreateDiscount}>
-            <div className="form-group">
-              <label>
-                Rota
-                <select
-                  value={discountForm.routeId}
-                  onChange={(e) =>
-                    setDiscountForm((p) => ({ ...p, routeId: e.target.value }))
-                  }
-                  required
-                >
-                  <option value="">Selecione a rota...</option>
-                  {routes.map((r) => (
-                    <option key={r.id} value={r.id}>
-                      #{r.id} — {r.carrierName} ({fmtDate(r.routeDate)}){" "}
-                      {fmt(r.totalAmount)}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </div>
-            <div className="form-row">
-              <div className="form-group">
-                <label>
-                  Data do PNR
-                  <input
-                    type="date"
-                    value={discountForm.discountDate}
-                    onChange={(e) =>
-                      setDiscountForm((p) => ({
-                        ...p,
-                        discountDate: e.target.value,
-                      }))
-                    }
-                    required
-                  />
-                </label>
-              </div>
-              <div className="form-group">
-                <label>
-                  Valor (R$)
-                  <input
-                    type="number"
-                    step="0.01"
-                    min="0.01"
-                    placeholder="0,00"
-                    value={discountForm.discountAmount}
-                    onChange={(e) =>
-                      setDiscountForm((p) => ({
-                        ...p,
-                        discountAmount: e.target.value,
-                      }))
-                    }
-                    required
-                  />
-                </label>
-              </div>
-            </div>
-            <div className="form-group">
-              <label>
-                Observação (opcional)
-                <input
-                  value={discountForm.notes}
-                  onChange={(e) =>
-                    setDiscountForm((p) => ({ ...p, notes: e.target.value }))
-                  }
-                  placeholder="Ex: pacote danificado"
-                />
-              </label>
-            </div>
-            <div style={{ display: "flex", gap: 8 }}>
-              <button type="submit" disabled={saving}>
-                {saving ? "Salvando..." : "Registrar PNR"}
-              </button>
-              <button
-                type="button"
-                className="btn-ghost"
-                onClick={() => setShowPnr(false)}
-              >
-                Cancelar
-              </button>
-            </div>
-          </form>
-        )}
-      </div>
-
-      {showScheduleModal && (
-        <div className="modal-overlay">
-          <div className="modal-sheet">
-            <div
-              style={{
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-                marginBottom: 16,
-              }}
-            >
-              <h2 style={{ margin: 0, fontSize: 18 }}>
-                Agendamento — {showScheduleModal.name}
-              </h2>
-              <button
-                className="btn-ghost btn-small"
-                onClick={() => setShowScheduleModal(null)}
-              >
-                ✕
-              </button>
-            </div>
-
-            <form onSubmit={handleSaveSchedule}>
-              <div className="form-group">
-                <label>
-                  Tipo de pagamento
-                  <select
-                    value={scheduleForm.frequency}
-                    onChange={(e) =>
-                      setScheduleForm((p) => ({
-                        ...p,
-                        frequency: e.target.value,
-                      }))
-                    }
-                    required
-                  >
-                    <option value="">Selecione...</option>
-                    <option value="weekly">Semanal (toda semana)</option>
-                    <option value="quinzena">
-                      Quinzenal (dia 15 / fim do mês)
-                    </option>
-                  </select>
-                </label>
-              </div>
-
-              {scheduleForm.frequency === "weekly" && (
-                <>
-                  <div className="form-group">
-                    <label>
-                      Dia do pagamento
-                      <select
-                        value={scheduleForm.weekday}
-                        onChange={(e) =>
-                          setScheduleForm((p) => ({
-                            ...p,
-                            weekday: e.target.value,
-                          }))
-                        }
-                        required
-                      >
-                        <option value="">Selecione...</option>
-                        {WEEKDAY_FULL.map((d, i) => (
-                          <option key={i} value={i}>
-                            {d}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                  </div>
-                  <div className="form-group">
-                    <label>
-                      Dia que a semana começa (opcional)
-                      <select
-                        value={scheduleForm.weekStartDay}
-                        onChange={(e) =>
-                          setScheduleForm((p) => ({
-                            ...p,
-                            weekStartDay: e.target.value,
-                          }))
-                        }
-                      >
-                        <option value="">
-                          Padrão (semana começa no sábado)
-                        </option>
-                        {WEEKDAY_FULL.map((d, i) => (
-                          <option key={i} value={i}>
-                            {d}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                  </div>
-                  {scheduleForm.weekday !== "" && (
-                    <div
-                      style={{
-                        background: "var(--bg-secondary)",
-                        borderRadius: 8,
-                        padding: "10px 14px",
-                        fontSize: 13,
-                        color: "var(--text-secondary)",
-                        marginBottom: 14,
-                      }}
-                    >
-                      {scheduleForm.weekStartDay !== ""
-                        ? `Semana de ${
-                            WEEKDAY_FULL[scheduleForm.weekStartDay]
-                          } a ${
-                            WEEKDAY_FULL[
-                              (Number(scheduleForm.weekStartDay) - 1 + 7) % 7
-                            ]
-                          }, recebe toda ${WEEKDAY_FULL[scheduleForm.weekday]}.`
-                        : `Recebe toda ${WEEKDAY_FULL[scheduleForm.weekday]}.`}
-                    </div>
-                  )}
-                </>
-              )}
-
-              {scheduleForm.frequency === "quinzena" && (
-                <div className="form-group">
-                  <label>
-                    Dia do mês
-                    <input
-                      type="number"
-                      min="1"
-                      max="31"
-                      placeholder="Ex: 15"
-                      value={scheduleForm.dayOfMonth}
-                      onChange={(e) =>
-                        setScheduleForm((p) => ({
-                          ...p,
-                          dayOfMonth: e.target.value,
-                        }))
-                      }
-                      required
-                    />
-                  </label>
-                  <div
-                    style={{
-                      fontSize: 12,
-                      color: "var(--text-muted)",
-                      marginTop: 4,
-                    }}
-                  >
-                    Pagamento no dia {scheduleForm.dayOfMonth || "?"} e no
-                    último dia do mês.
-                  </div>
-                </div>
-              )}
-
-              <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-                <button type="submit" className="btn-full" disabled={saving}>
-                  {saving ? "Salvando..." : "Salvar agendamento"}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
