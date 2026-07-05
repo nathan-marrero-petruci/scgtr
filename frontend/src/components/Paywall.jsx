@@ -74,10 +74,10 @@ export default function Paywall({ onLogout }) {
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
               <div>
                 <div style={{ fontWeight: 700, fontSize: 14, textTransform: "uppercase", letterSpacing: "0.05em", color: "var(--text-1)" }}>Anual</div>
-                <div style={{ color: "var(--text-3)", fontSize: 13, marginTop: 2 }}>R$ 249 cobrado uma vez</div>
+                <div style={{ color: "var(--text-3)", fontSize: 13, marginTop: 2 }}>R$ 299 cobrado uma vez</div>
               </div>
               <div style={{ textAlign: "right" }}>
-                <div style={{ fontWeight: 800, fontSize: 24, color: "var(--green)" }}>R$ 20,75</div>
+                <div style={{ fontWeight: 800, fontSize: 24, color: "var(--green)" }}>R$ 24,92</div>
                 <div style={{ color: "var(--text-3)", fontSize: 12 }}>/mês</div>
               </div>
             </div>
@@ -103,7 +103,7 @@ export default function Paywall({ onLogout }) {
                 <div style={{ color: "var(--text-3)", fontSize: 13, marginTop: 2 }}>Cobrado todo mês</div>
               </div>
               <div style={{ textAlign: "right" }}>
-                <div style={{ fontWeight: 800, fontSize: 24, color: "var(--text-1)" }}>R$ 24,90</div>
+                <div style={{ fontWeight: 800, fontSize: 24, color: "var(--text-1)" }}>R$ 29,90</div>
                 <div style={{ color: "var(--text-3)", fontSize: 12 }}>/mês</div>
               </div>
             </div>

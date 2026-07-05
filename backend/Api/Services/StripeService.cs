@@ -93,8 +93,8 @@ public class StripeService
         await _context.SaveChangesAsync();
     }
 
-    // Escada mensal (centavos, mensalidade 2490): 1ª = 25%, 2ª completa 50%, 3ª completa 100%.
-    private static readonly int[] ReferralLevelTotals = [0, 622, 1245, 2490];
+    // Escada mensal (centavos, mensalidade 2990): 1ª = 25%, 2ª completa 50%, 3ª completa 100%.
+    private static readonly int[] ReferralLevelTotals = [0, 747, 1495, 2990];
 
     private async Task ProcessReferral(User user)
     {
