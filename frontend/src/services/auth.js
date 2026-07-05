@@ -15,11 +15,12 @@ const resolveApiUrl = () => {
 const API_URL = resolveApiUrl();
 
 class AuthService {
-  async register(email, password) {
+  async register(email, password, referralCode) {
     try {
       const response = await axios.post(`${API_URL}/auth/register`, {
         email,
         password,
+        referralCode: referralCode || null,
       });
       if (response.data.token) this.setAuthData(response.data);
       return response.data;
@@ -45,18 +46,21 @@ class AuthService {
 
   setAuthData(data) {
     localStorage.setItem("token", data.token);
-    localStorage.setItem(
-      "user",
-      JSON.stringify({
-        email: data.email,
-        userId: data.userId,
-      })
-    );
+    localStorage.setItem("user", JSON.stringify({
+      email: data.email,
+      userId: data.userId,
+    }));
+    localStorage.setItem("subscription", JSON.stringify({
+      status: data.subscriptionStatus,
+      trialEndsAt: data.trialEndsAt,
+      referralCode: data.referralCode,
+    }));
   }
 
   logout() {
     localStorage.removeItem("token");
     localStorage.removeItem("user");
+    localStorage.removeItem("subscription");
   }
 
   getToken() {
@@ -68,10 +72,14 @@ class AuthService {
     return user ? JSON.parse(user) : null;
   }
 
+  getSubscription() {
+    const sub = localStorage.getItem("subscription");
+    return sub ? JSON.parse(sub) : null;
+  }
+
   isAuthenticated() {
     const token = this.getToken();
     if (!token) return false;
-
     try {
       const decoded = jwtDecode(token);
       return decoded.exp > Date.now() / 1000;

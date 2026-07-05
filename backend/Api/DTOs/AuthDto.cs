@@ -14,6 +14,8 @@ public class RegisterDto
         ErrorMessage = "A senha deve ter no mínimo 8 caracteres, letra maiúscula, minúscula, número e caractere especial."
     )]
     public string Password { get; set; } = string.Empty;
+
+    public string? ReferralCode { get; set; }
 }
 
 public class LoginDto
@@ -31,4 +33,7 @@ public class AuthResponseDto
     public string Token { get; set; } = string.Empty;
     public string Email { get; set; } = string.Empty;
     public int UserId { get; set; }
+    public string SubscriptionStatus { get; set; } = string.Empty;
+    public DateTime? TrialEndsAt { get; set; }
+    public string? ReferralCode { get; set; }
 }

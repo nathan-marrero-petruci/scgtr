@@ -7,6 +7,7 @@ using System.Security.Claims;
 using Api.Data;
 using Api.Services;
 using Api.Models;
+using Stripe;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -40,6 +41,7 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
 
     builder.Services.AddScoped<AuthService>();
     builder.Services.AddScoped<GanhoService>();
+    builder.Services.AddScoped<StripeService>();
 
     builder.Services.AddDbContext<AppDbContext>(options => options.UseNpgsql(connectionString));
 
@@ -93,6 +95,42 @@ if (app.Environment.IsDevelopment())
     app.UseHttpsRedirection();
     app.UseAuthentication();
     app.UseAuthorization();
+
+    app.Use(async (context, next) =>
+    {
+        var path = context.Request.Path.Value ?? "";
+        var isExempt = path.StartsWith("/api/auth", StringComparison.OrdinalIgnoreCase)
+                    || path.StartsWith("/api/stripe", StringComparison.OrdinalIgnoreCase)
+                    || path.StartsWith("/api/subscriptions", StringComparison.OrdinalIgnoreCase);
+
+        if (!isExempt && context.User.Identity?.IsAuthenticated == true)
+        {
+            var userId = int.TryParse(
+                context.User.FindFirst(ClaimTypes.NameIdentifier)?.Value, out var id) ? id : 0;
+
+            if (userId > 0)
+            {
+                var db = context.RequestServices.GetRequiredService<AppDbContext>();
+                var user = await db.Users.FindAsync(userId);
+                var active = user?.SubscriptionStatus == "active"
+                          || (user?.SubscriptionStatus == "trialing" && user.TrialEndsAt > DateTime.UtcNow);
+
+                if (!active)
+                {
+                    context.Response.StatusCode = 402;
+                    await context.Response.WriteAsJsonAsync(new
+                    {
+                        message = "Assinatura necessária.",
+                        code = "subscription_required",
+                    });
+                    return;
+                }
+            }
+        }
+
+        await next();
+    });
+
     app.MapControllers();
 
 app.UseCors("frontend");
@@ -816,6 +854,25 @@ app.MapDelete("/api/fuel-entries/{id:int}", async (AppDbContext db, HttpContext 
     await db.SaveChangesAsync();
     return Results.NoContent();
 }).RequireAuthorization();
+
+app.MapPost("/api/stripe/webhook", async (HttpRequest req, StripeService stripeService) =>
+{
+    req.EnableBuffering();
+    using var reader = new StreamReader(req.Body, leaveOpen: true);
+    var json = await reader.ReadToEndAsync();
+    req.Body.Position = 0;
+
+    var signature = req.Headers["Stripe-Signature"].FirstOrDefault() ?? "";
+    try
+    {
+        await stripeService.HandleWebhookEvent(json, signature);
+        return Results.Ok();
+    }
+    catch (StripeException)
+    {
+        return Results.BadRequest();
+    }
+});
 
 app.Run();
 
