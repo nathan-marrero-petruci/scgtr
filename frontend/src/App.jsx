@@ -4,8 +4,12 @@ import { HistoricoChart } from "./Charts";
 import React from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import Login from "./components/Login";
+import Register from "./components/Register";
 import HelpTab from "./components/HelpTab";
+import Paywall from "./components/Paywall";
+import Subscription from "./components/Subscription";
 import authService from "./services/auth";
+import { isSubscriptionActive, trialDaysRemaining } from "./services/subscription";
 
 // ─── API ────────────────────────────────────────────────────────────────────
 
@@ -45,6 +49,12 @@ const request = async (path, options = {}) => {
     authService.logout();
     window.location.reload();
     throw new Error("Sessão expirada. Faça login novamente.");
+  }
+
+  if (response.status === 402) {
+    localStorage.removeItem("subscription");
+    window.dispatchEvent(new CustomEvent("subscription-required"));
+    throw new Error("Assinatura necessária.");
   }
 
   if (!response.ok) {
@@ -229,6 +239,13 @@ const IconHelp = () => (
   </svg>
 );
 
+const IconConta = () => (
+  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+    <circle cx="12" cy="7" r="4"/>
+  </svg>
+);
+
 // ─── App ────────────────────────────────────────────────────────────────────
 
 export default function App() {
@@ -241,15 +258,51 @@ export default function App() {
   const [carriers, setCarriers] = useState([]);
   const [error, setError] = useState("");
   const [agendaRefreshKey, setAgendaRefreshKey] = useState(0);
+  const [subscription, setSubscription] = useState(() => {
+    const sub = localStorage.getItem("subscription");
+    return sub ? JSON.parse(sub) : null;
+  });
+  const [subscriptionLoading, setSubscriptionLoading] = useState(() => {
+    return !!localStorage.getItem("token") && !localStorage.getItem("subscription");
+  });
 
   // Verificar autenticação ao iniciar
   useEffect(() => {
     const checkAuth = () => {
       const authenticated = authService.isAuthenticated();
       setIsAuthenticated(authenticated);
+      if (!authenticated) setSubscriptionLoading(false);
       setLoading(false);
     };
     checkAuth();
+  }, []);
+
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    const token = localStorage.getItem("token");
+    setSubscriptionLoading(true);
+    fetch(`${API_BASE}/subscriptions/status`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (!data) return;
+        const sub = { status: data.status, trialEndsAt: data.trialEndsAt, referralCode: data.referralCode };
+        localStorage.setItem("subscription", JSON.stringify(sub));
+        setSubscription(sub);
+      })
+      .catch((err) => { console.error(err); })
+      .finally(() => setSubscriptionLoading(false));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAuthenticated]);
+
+  useEffect(() => {
+    const handler = () => {
+      const sub = localStorage.getItem("subscription");
+      setSubscription(sub ? JSON.parse(sub) : null);
+    };
+    window.addEventListener("subscription-required", handler);
+    return () => window.removeEventListener("subscription-required", handler);
   }, []);
 
   useEffect(() => {
@@ -290,9 +343,16 @@ export default function App() {
     [loadCarriers]
   );
 
+  const handleLogin = useCallback(() => {
+    setIsAuthenticated(true);
+    const sub = localStorage.getItem("subscription");
+    setSubscription(sub ? JSON.parse(sub) : null);
+  }, []);
+
   const handleLogout = () => {
     authService.logout();
     setIsAuthenticated(false);
+    setSubscription(null);
     setTab("agenda");
   };
 
@@ -302,6 +362,7 @@ export default function App() {
     { id: "agenda", label: "Agenda", Icon: IconAgenda },
     { id: "registrar", label: "Registrar", Icon: IconRegister },
     { id: "historico", label: "Histórico", Icon: IconHistory },
+    { id: "conta", label: "Conta", Icon: IconConta },
     { id: "ajuda", label: "Ajuda", Icon: IconHelp },
   ];
 
@@ -309,11 +370,11 @@ export default function App() {
     agenda: "Próximos Recebimentos",
     registrar: "Registrar",
     historico: "Histórico",
+    conta: "Minha Conta",
     ajuda: "Central de Ajuda",
   };
 
-  // Se ainda está carregando, mostra loading
-  if (loading) {
+  if (loading || subscriptionLoading) {
     return (
       <div
         className="app-shell"
@@ -329,24 +390,32 @@ export default function App() {
     );
   }
 
-  // Se não está autenticado, mostra tela de login
   if (!isAuthenticated) {
     return (
       <BrowserRouter>
         <Routes>
-          <Route
-            path="/login"
-            element={<Login onLogin={() => setIsAuthenticated(true)} />}
-          />
+          <Route path="/login" element={<Login onLogin={handleLogin} />} />
+          <Route path="/register" element={<Register onLogin={handleLogin} />} />
           <Route path="*" element={<Navigate to="/login" />} />
         </Routes>
       </BrowserRouter>
     );
   }
 
-  // Se está autenticado, mostra o app normal com botão de logout
+  if (!isSubscriptionActive(subscription?.status, subscription?.trialEndsAt)) {
+    return <Paywall onLogout={handleLogout} />;
+  }
+
   return (
     <div className="app-shell">
+      {subscription?.status === "trialing" && (
+        <div style={{ background: "var(--blue-bg)", borderBottom: "1px solid var(--border)", color: "var(--text-1)", textAlign: "center", padding: "8px 16px", fontSize: 13, fontWeight: 500 }}>
+          Faltam <strong>{trialDaysRemaining(subscription.trialEndsAt)} dias</strong> de teste grátis.{" "}
+          <button onClick={() => setTab("conta")} style={{ background: "none", border: "none", color: "var(--blue)", cursor: "pointer", fontWeight: 700, fontSize: 13, padding: 0, minHeight: 0, borderRadius: 0 }}>
+            Assinar agora →
+          </button>
+        </div>
+      )}
       <header className="app-header">
         <h1>{tabTitles[tab]}</h1>
         <div className="app-header-right">
@@ -401,6 +470,7 @@ export default function App() {
         {tab === "historico" && (
           <HistoricoTab activeCarriers={activeCarriers} onError={setError} />
         )}
+        {tab === "conta" && <Subscription />}
         {tab === "ajuda" && <HelpTab />}
       </main>
 

@@ -4,7 +4,6 @@ using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
-using Api.Data;
 using Api.Models;
 using Api.DTOs;
 
@@ -29,18 +28,25 @@ public class AuthService
         if (!PasswordPolicy.IsMatch(dto.Password))
             return null;
 
-        if (await _context.Users.AnyAsync(u => u.Email == dto.Email.ToLower()))
+        var email = dto.Email.Trim().ToLower();
+        if (await _context.Users.AnyAsync(u => u.Email == email))
             return null;
+
+        var referralCode = await GenerateUniqueReferralCode();
+        var referredById = await ResolveReferrer(dto.ReferralCode);
 
         var user = new User
         {
-            Email = dto.Email.Trim().ToLower(),
-            PasswordHash = BCrypt.Net.BCrypt.HashPassword(dto.Password)
+            Email = email,
+            PasswordHash = BCrypt.Net.BCrypt.HashPassword(dto.Password),
+            SubscriptionStatus = "trialing",
+            TrialEndsAt = DateTime.UtcNow.AddDays(14),
+            ReferralCode = referralCode,
+            ReferredById = referredById,
         };
 
         _context.Users.Add(user);
         await _context.SaveChangesAsync();
-
         return GenerateToken(user);
     }
 
@@ -55,11 +61,26 @@ public class AuthService
         return GenerateToken(user);
     }
 
+    private async Task<string> GenerateUniqueReferralCode()
+    {
+        string code;
+        do { code = Guid.NewGuid().ToString("N")[..8].ToUpper(); }
+        while (await _context.Users.AnyAsync(u => u.ReferralCode == code));
+        return code;
+    }
+
+    private async Task<int?> ResolveReferrer(string? code)
+    {
+        if (string.IsNullOrWhiteSpace(code)) return null;
+        var referrer = await _context.Users
+            .FirstOrDefaultAsync(u => u.ReferralCode == code.Trim().ToUpper());
+        return referrer?.Id;
+    }
+
     private AuthResponseDto GenerateToken(User user)
     {
         var jwtKey = _configuration["Jwt:Key"]
             ?? throw new InvalidOperationException("Jwt:Key is not configured.");
-
         if (jwtKey.Length < 32)
             throw new InvalidOperationException("Jwt:Key must be at least 32 characters.");
 
@@ -67,7 +88,7 @@ public class AuthService
         {
             new Claim(ClaimTypes.NameIdentifier, user.Id.ToString()),
             new Claim(ClaimTypes.Email, user.Email),
-            new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString())
+            new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString()),
         };
 
         var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtKey));
@@ -78,14 +99,16 @@ public class AuthService
             audience: _configuration["Jwt:Audience"],
             claims: claims,
             expires: DateTime.UtcNow.AddDays(7),
-            signingCredentials: creds
-        );
+            signingCredentials: creds);
 
         return new AuthResponseDto
         {
             Token = new JwtSecurityTokenHandler().WriteToken(token),
             Email = user.Email,
-            UserId = user.Id
+            UserId = user.Id,
+            SubscriptionStatus = user.SubscriptionStatus,
+            TrialEndsAt = user.TrialEndsAt,
+            ReferralCode = user.ReferralCode,
         };
     }
 }
