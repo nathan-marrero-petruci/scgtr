@@ -70,6 +70,7 @@ public class StripeService
             case EventTypes.CheckoutSessionCompleted:
                 await HandleCheckoutCompleted((Stripe.Checkout.Session)stripeEvent.Data.Object);
                 break;
+            case EventTypes.CustomerSubscriptionCreated:
             case EventTypes.CustomerSubscriptionUpdated:
                 await HandleSubscriptionUpdated((Subscription)stripeEvent.Data.Object);
                 break;
