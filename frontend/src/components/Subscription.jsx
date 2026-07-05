@@ -95,11 +95,11 @@ export default function Subscription() {
                 2 meses grátis
               </span>
               <button className="btn-full btn-success" onClick={() => handleCheckout(PRICE_ANNUAL, "annual")} disabled={!!actionLoading}>
-                {actionLoading === "annual" ? "Aguarde..." : "Plano Anual por R$ 249,00"}
+                {actionLoading === "annual" ? "Aguarde..." : "Plano Anual por R$ 299,00"}
               </button>
             </div>
             <button className="btn-full btn-ghost" onClick={() => handleCheckout(PRICE_MONTHLY, "monthly")} disabled={!!actionLoading}>
-              {actionLoading === "monthly" ? "Aguarde..." : "Plano Mensal por R$ 24,90"}
+              {actionLoading === "monthly" ? "Aguarde..." : "Plano Mensal por R$ 29,90"}
             </button>
           </div>
         )}
