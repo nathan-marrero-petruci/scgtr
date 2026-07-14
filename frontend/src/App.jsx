@@ -165,7 +165,8 @@ const scheduleLabel = (schedule) => {
     return `Semanal • Paga na ${payDay}`;
   }
   if (schedule.frequency === "quinzena") {
-    return `Quinzenal • Dia ${schedule.dayOfMonth}`;
+    const secondDay = schedule.secondDayOfMonth ?? "fim do mês";
+    return `Quinzenal • Dia ${schedule.dayOfMonth} e ${secondDay}`;
   }
   return schedule.frequency;
 };
@@ -1275,7 +1276,7 @@ function CarrierManager({ carriers, onRefresh, onError }) {
   const [showAddCarrier, setShowAddCarrier] = useState(false);
   const [showScheduleModal, setShowScheduleModal] = useState(null);
   const [carrierForm, setCarrierForm] = useState({ name: "" });
-  const [scheduleForm, setScheduleForm] = useState({ frequency: "", weekday: "", dayOfMonth: "", weekStartDay: "" });
+  const [scheduleForm, setScheduleForm] = useState({ frequency: "", weekday: "", dayOfMonth: "", secondDayOfMonth: "", weekStartDay: "" });
   const [saving, setSaving] = useState(false);
   const [deletingCarrierId, setDeletingCarrierId] = useState(null);
   const [carrierError, setCarrierError] = useState("");
@@ -1287,10 +1288,11 @@ function CarrierManager({ carriers, onRefresh, onError }) {
         frequency: s.frequency || "",
         weekday: s.weekday != null ? String(s.weekday) : "",
         dayOfMonth: s.dayOfMonth != null ? String(s.dayOfMonth) : "",
+        secondDayOfMonth: s.secondDayOfMonth != null ? String(s.secondDayOfMonth) : "",
         weekStartDay: s.weekStartDay != null ? String(s.weekStartDay) : "",
       });
     } catch {
-      setScheduleForm({ frequency: "", weekday: "", dayOfMonth: "", weekStartDay: "" });
+      setScheduleForm({ frequency: "", weekday: "", dayOfMonth: "", secondDayOfMonth: "", weekStartDay: "" });
     }
     setShowScheduleModal(c);
   };
@@ -1319,6 +1321,7 @@ function CarrierManager({ carriers, onRefresh, onError }) {
         frequency: scheduleForm.frequency,
         weekday: scheduleForm.frequency === "weekly" && scheduleForm.weekday !== "" ? Number(scheduleForm.weekday) : null,
         dayOfMonth: scheduleForm.frequency === "quinzena" && scheduleForm.dayOfMonth !== "" ? Number(scheduleForm.dayOfMonth) : null,
+        secondDayOfMonth: scheduleForm.frequency === "quinzena" && scheduleForm.secondDayOfMonth !== "" ? Number(scheduleForm.secondDayOfMonth) : null,
         weekStartDay: scheduleForm.frequency === "weekly" && scheduleForm.weekStartDay !== "" ? Number(scheduleForm.weekStartDay) : null,
       };
       await request(`/carriers/${showScheduleModal.id}/payment-schedule`, { method: "PUT", body: JSON.stringify(body) });
@@ -1418,7 +1421,7 @@ function CarrierManager({ carriers, onRefresh, onError }) {
                   <select value={scheduleForm.frequency} onChange={(e) => setScheduleForm((p) => ({ ...p, frequency: e.target.value }))} required>
                     <option value="">Selecione...</option>
                     <option value="weekly">Semanal (toda semana)</option>
-                    <option value="quinzena">Quinzenal (dia 15 / fim do mês)</option>
+                    <option value="quinzena">Quinzenal (dois dias do mês)</option>
                   </select>
                 </label>
               </div>
@@ -1454,11 +1457,15 @@ function CarrierManager({ carriers, onRefresh, onError }) {
               {scheduleForm.frequency === "quinzena" && (
                 <div className="form-group">
                   <label>
-                    Dia do mês
-                    <input type="number" min="1" max="31" placeholder="Ex: 15" value={scheduleForm.dayOfMonth} onChange={(e) => setScheduleForm((p) => ({ ...p, dayOfMonth: e.target.value }))} required />
+                    1º dia de pagamento
+                    <input type="number" min="1" max="31" placeholder="Ex: 10" value={scheduleForm.dayOfMonth} onChange={(e) => setScheduleForm((p) => ({ ...p, dayOfMonth: e.target.value }))} required />
+                  </label>
+                  <label>
+                    2º dia de pagamento
+                    <input type="number" min="1" max="31" placeholder="Ex: 25 (opcional, padrão: último dia do mês)" value={scheduleForm.secondDayOfMonth} onChange={(e) => setScheduleForm((p) => ({ ...p, secondDayOfMonth: e.target.value }))} />
                   </label>
                   <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 4 }}>
-                    Pagamento no dia {scheduleForm.dayOfMonth || "?"} e no último dia do mês.
+                    Pagamento no dia {scheduleForm.dayOfMonth || "?"} e no dia {scheduleForm.secondDayOfMonth || "último dia do mês"}.
                   </div>
                 </div>
               )}

@@ -154,7 +154,7 @@ app.MapGet("/api/carriers", async (AppDbContext db, HttpContext ctx, bool includ
         c.Name,
         c.IsActive,
         c.PaymentSchedule != null
-            ? new PaymentScheduleResponse(c.PaymentSchedule.Frequency, c.PaymentSchedule.Weekday, c.PaymentSchedule.DayOfMonth, c.PaymentSchedule.WeekStartDay)
+            ? new PaymentScheduleResponse(c.PaymentSchedule.Frequency, c.PaymentSchedule.Weekday, c.PaymentSchedule.DayOfMonth, c.PaymentSchedule.WeekStartDay, c.PaymentSchedule.SecondDayOfMonth)
             : null,
         c.CreatedAt
     )).ToList();
@@ -270,7 +270,7 @@ app.MapGet("/api/carriers/{id:int}/payment-schedule", async (AppDbContext db, Ht
     if (schedule is null)
         return Results.NotFound();
 
-    return Results.Ok(new PaymentScheduleResponse(schedule.Frequency, schedule.Weekday, schedule.DayOfMonth, schedule.WeekStartDay));
+    return Results.Ok(new PaymentScheduleResponse(schedule.Frequency, schedule.Weekday, schedule.DayOfMonth, schedule.WeekStartDay, schedule.SecondDayOfMonth));
 }).RequireAuthorization();
 
 app.MapPut("/api/carriers/{id:int}/payment-schedule", async (AppDbContext db, HttpContext ctx, int id, PaymentScheduleRequest request) =>
@@ -289,6 +289,10 @@ app.MapPut("/api/carriers/{id:int}/payment-schedule", async (AppDbContext db, Ht
     if (request.Frequency == "quinzena" && (!request.DayOfMonth.HasValue || request.DayOfMonth < 1 || request.DayOfMonth > 31))
         return Results.BadRequest("DayOfMonth is required for 'quinzena' and must be between 1 and 31.");
 
+    if (request.Frequency == "quinzena" && request.SecondDayOfMonth.HasValue &&
+        (request.SecondDayOfMonth < 1 || request.SecondDayOfMonth > 31 || request.SecondDayOfMonth == request.DayOfMonth))
+        return Results.BadRequest("SecondDayOfMonth must be between 1 and 31 and different from DayOfMonth.");
+
     var schedule = await db.PaymentSchedules.FirstOrDefaultAsync(x => x.CarrierId == id);
     if (schedule is null)
     {
@@ -299,6 +303,7 @@ app.MapPut("/api/carriers/{id:int}/payment-schedule", async (AppDbContext db, Ht
             Weekday = request.Weekday,
             DayOfMonth = request.DayOfMonth,
             WeekStartDay = request.WeekStartDay,
+            SecondDayOfMonth = request.SecondDayOfMonth,
             CreatedAt = DateTime.UtcNow
         };
         db.PaymentSchedules.Add(schedule);
@@ -309,10 +314,11 @@ app.MapPut("/api/carriers/{id:int}/payment-schedule", async (AppDbContext db, Ht
         schedule.Weekday = request.Weekday;
         schedule.DayOfMonth = request.DayOfMonth;
         schedule.WeekStartDay = request.WeekStartDay;
+        schedule.SecondDayOfMonth = request.SecondDayOfMonth;
     }
 
     await db.SaveChangesAsync();
-    return Results.Ok(new PaymentScheduleResponse(schedule.Frequency, schedule.Weekday, schedule.DayOfMonth, schedule.WeekStartDay));
+    return Results.Ok(new PaymentScheduleResponse(schedule.Frequency, schedule.Weekday, schedule.DayOfMonth, schedule.WeekStartDay, schedule.SecondDayOfMonth));
 }).RequireAuthorization();
 
 // ── Routes ────────────────────────────────────────────────────────────────────
@@ -600,10 +606,11 @@ app.MapGet("/api/payments", async (AppDbContext db, HttpContext ctx, DateOnly? s
                 var month = iterateMonth.Month;
                 var lastDay = DateTime.DaysInMonth(year, month);
                 var splitDay = Math.Min(schedule.DayOfMonth ?? 15, lastDay);
+                var secondPayDay = Math.Min(schedule.SecondDayOfMonth ?? lastDay, lastDay);
 
                 var firstHalfStart = new DateOnly(year, month, 1);
                 var firstHalfEnd = new DateOnly(year, month, splitDay);
-                var firstHalfScheduled = new DateOnly(year, month, lastDay);
+                var firstHalfScheduled = new DateOnly(year, month, secondPayDay);
 
                 if (firstHalfScheduled >= inicio && firstHalfScheduled <= fim)
                 {
@@ -938,6 +945,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
         modelBuilder.Entity<PaymentSchedule>().Property(x => x.Frequency).HasMaxLength(20).IsRequired();
         modelBuilder.Entity<PaymentSchedule>().Property(x => x.Weekday);
         modelBuilder.Entity<PaymentSchedule>().Property(x => x.DayOfMonth);
+        modelBuilder.Entity<PaymentSchedule>().Property(x => x.SecondDayOfMonth);
         modelBuilder.Entity<Payment>().Property(x => x.AmountReceived).HasColumnType("decimal(18,2)");
         modelBuilder.Entity<Payment>().Property(x => x.Notes).HasMaxLength(300);
         modelBuilder.Entity<FuelEntry>().Property(x => x.TotalCost).HasColumnType("decimal(18,2)");
@@ -1047,6 +1055,8 @@ public class PaymentSchedule
     public int? Weekday { get; set; }
     // 1..31 (used when Frequency == "quinzena")
     public int? DayOfMonth { get; set; }
+    // 1..31, second pay day of the month (used when Frequency == "quinzena"); falls back to last day of month when null
+    public int? SecondDayOfMonth { get; set; }
     // 0 = Sunday .. 6 = Saturday — first day of the work week (weekly only)
     public int? WeekStartDay { get; set; }
     public DateTime CreatedAt { get; set; }
@@ -1089,8 +1099,8 @@ public record DiscountResponse(
     DateOnly DiscountDate, decimal DiscountAmount, string? Notes, DateTime CreatedAt
 );
 
-public record PaymentScheduleRequest(string Frequency, int? Weekday, int? DayOfMonth, int? WeekStartDay);
-public record PaymentScheduleResponse(string Frequency, int? Weekday, int? DayOfMonth, int? WeekStartDay);
+public record PaymentScheduleRequest(string Frequency, int? Weekday, int? DayOfMonth, int? WeekStartDay, int? SecondDayOfMonth = null);
+public record PaymentScheduleResponse(string Frequency, int? Weekday, int? DayOfMonth, int? WeekStartDay, int? SecondDayOfMonth = null);
 
 public record PaymentCreateRequest(int CarrierId, DateOnly PeriodStart, DateOnly PeriodEnd, DateOnly ScheduledDate, decimal AmountReceived, string? Notes);
 public record PaymentListItemResponse(
