@@ -1575,6 +1575,7 @@ function HistoricoTab({ activeCarriers, onError }) {
   const [endDate, setEndDate] = useState(todayStr);
   const [activePreset, setActivePreset] = useState(30);
   const [editingRoute, setEditingRoute] = useState(null);
+  const [deletingRoute, setDeletingRoute] = useState(null);
   const [selectedCarrier, setSelectedCarrier] = useState("");
 
   const load = useCallback(
@@ -1618,6 +1619,16 @@ function HistoricoTab({ activeCarriers, onError }) {
     },
     [onError, activeCarriers]
   );
+
+  const handleDeleteRoute = async (id) => {
+    try {
+      await request(`/routes/${id}`, { method: "DELETE" });
+      setDeletingRoute(null);
+      load(startDate, endDate, selectedCarrier);
+    } catch (err) {
+      onError(err.message);
+    }
+  };
 
   const handleDeleteDiscount = async (id) => {
     try {
@@ -1809,6 +1820,13 @@ function HistoricoTab({ activeCarriers, onError }) {
                   >
                     Editar
                   </button>
+                  <button
+                    className="btn-ghost btn-small"
+                    onClick={() => setDeletingRoute(r)}
+                    title="Excluir rota"
+                  >
+                    🗑
+                  </button>
                 </div>
               </div>
             ))}
@@ -1902,6 +1920,25 @@ function HistoricoTab({ activeCarriers, onError }) {
           }}
           onError={onError}
         />
+      )}
+
+      {deletingRoute && (
+        <div className="modal-overlay" onClick={() => setDeletingRoute(null)}>
+          <div className="modal-sheet" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 400 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+              <h2 style={{ margin: 0, fontSize: 18 }}>Excluir rota</h2>
+              <button className="btn-ghost btn-small" onClick={() => setDeletingRoute(null)}>✕</button>
+            </div>
+            <p style={{ fontSize: 14, color: "var(--text-secondary)", marginBottom: 20 }}>
+              Excluir a rota de <strong>{deletingRoute.carrierName}</strong> do dia{" "}
+              <strong>{fmtDate(deletingRoute.routeDate)}</strong>? Descontos vinculados também serão removidos. Esta ação não pode ser desfeita.
+            </p>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button className="btn-danger btn-full" onClick={() => handleDeleteRoute(deletingRoute.id)}>Excluir</button>
+              <button className="btn-ghost btn-full" onClick={() => setDeletingRoute(null)}>Cancelar</button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

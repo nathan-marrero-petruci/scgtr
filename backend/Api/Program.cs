@@ -449,6 +449,18 @@ app.MapPut("/api/routes/{id:int}", async (AppDbContext db, HttpContext ctx, int 
     return Results.Ok(route);
 }).RequireAuthorization();
 
+app.MapDelete("/api/routes/{id:int}", async (AppDbContext db, HttpContext ctx, int id) =>
+{
+    var userId = GetUserId(ctx);
+    var route = await db.Routes.Include(r => r.Carrier).FirstOrDefaultAsync(r => r.Id == id);
+    if (route is null || route.Carrier.UserId != userId)
+        return Results.NotFound();
+
+    db.Routes.Remove(route);
+    await db.SaveChangesAsync();
+    return Results.NoContent();
+}).RequireAuthorization();
+
 // ── Discounts ─────────────────────────────────────────────────────────────────
 
 app.MapGet("/api/discounts", async (AppDbContext db, HttpContext ctx, int? routeId = null, DateOnly? startDate = null, DateOnly? endDate = null) =>
@@ -554,6 +566,22 @@ app.MapGet("/api/payments", async (AppDbContext db, HttpContext ctx, DateOnly? s
         var schedule = c.PaymentSchedule;
         if (schedule is null) continue;
 
+        // Periods can start well before `inicio` (weekly lookback / quinzena month start),
+        // so fetch once with a safety buffer instead of querying per-period.
+        var fetchStart = inicio.AddDays(-40);
+        var allRoutes = await db.Routes
+            .Include(r => r.Discounts)
+            .Where(r => r.CarrierId == c.Id && r.RouteDate >= fetchStart && r.RouteDate <= fim)
+            .ToListAsync();
+        var allPayments = await db.Payments
+            .Where(p => p.CarrierId == c.Id && p.PeriodEnd >= fetchStart && p.PeriodStart <= fim)
+            .ToListAsync();
+
+        List<DeliveryRoute> RoutesIn(DateOnly start, DateOnly end) =>
+            allRoutes.Where(r => r.RouteDate >= start && r.RouteDate <= end).ToList();
+        Payment? PaymentFor(DateOnly start, DateOnly end) =>
+            allPayments.FirstOrDefault(p => p.PeriodStart == start && p.PeriodEnd == end);
+
         if (schedule.Frequency == "weekly")
         {
             var targetWeekday = (DayOfWeek)(schedule.Weekday ?? 0);
@@ -577,16 +605,13 @@ app.MapGet("/api/payments", async (AppDbContext db, HttpContext ctx, DateOnly? s
                     periodStart = scheduledDate.AddDays(-6);
                 }
 
-                var routesInPeriod = await db.Routes
-                    .Include(r => r.Discounts)
-                    .Where(r => r.CarrierId == c.Id && r.RouteDate >= periodStart && r.RouteDate <= periodEnd)
-                    .ToListAsync();
+                var routesInPeriod = RoutesIn(periodStart, periodEnd);
 
                 var grossEarnings = routesInPeriod.Sum(r => r.TotalAmount);
                 var totalDiscounts = routesInPeriod.SelectMany(r => r.Discounts).Sum(d => d.DiscountAmount);
                 var amountDue = grossEarnings - totalDiscounts;
 
-                var payment = await db.Payments.FirstOrDefaultAsync(p => p.CarrierId == c.Id && p.PeriodStart == periodStart && p.PeriodEnd == periodEnd);
+                var payment = PaymentFor(periodStart, periodEnd);
 
                 results.Add(new PaymentListItemResponse(
                     c.Id, c.Name, periodStart, periodEnd, scheduledDate,
@@ -614,11 +639,11 @@ app.MapGet("/api/payments", async (AppDbContext db, HttpContext ctx, DateOnly? s
 
                 if (firstHalfScheduled >= inicio && firstHalfScheduled <= fim)
                 {
-                    var routesInPeriod = await db.Routes.Include(r => r.Discounts).Where(r => r.CarrierId == c.Id && r.RouteDate >= firstHalfStart && r.RouteDate <= firstHalfEnd).ToListAsync();
+                    var routesInPeriod = RoutesIn(firstHalfStart, firstHalfEnd);
                     var grossEarnings = routesInPeriod.Sum(r => r.TotalAmount);
                     var totalDiscounts = routesInPeriod.SelectMany(r => r.Discounts).Sum(d => d.DiscountAmount);
                     var amountDue = grossEarnings - totalDiscounts;
-                    var payment = await db.Payments.FirstOrDefaultAsync(p => p.CarrierId == c.Id && p.PeriodStart == firstHalfStart && p.PeriodEnd == firstHalfEnd);
+                    var payment = PaymentFor(firstHalfStart, firstHalfEnd);
                     results.Add(new PaymentListItemResponse(c.Id, c.Name, firstHalfStart, firstHalfEnd, firstHalfScheduled, grossEarnings, totalDiscounts, amountDue, payment?.AmountReceived, payment?.ReceivedAt, payment is not null));
                 }
 
@@ -633,11 +658,11 @@ app.MapGet("/api/payments", async (AppDbContext db, HttpContext ctx, DateOnly? s
 
                     if (secondHalfScheduled >= inicio && secondHalfScheduled <= fim)
                     {
-                        var routesInPeriod = await db.Routes.Include(r => r.Discounts).Where(r => r.CarrierId == c.Id && r.RouteDate >= secondHalfStart && r.RouteDate <= secondHalfEnd).ToListAsync();
+                        var routesInPeriod = RoutesIn(secondHalfStart, secondHalfEnd);
                         var grossEarnings = routesInPeriod.Sum(r => r.TotalAmount);
                         var totalDiscounts = routesInPeriod.SelectMany(r => r.Discounts).Sum(d => d.DiscountAmount);
                         var amountDue = grossEarnings - totalDiscounts;
-                        var payment = await db.Payments.FirstOrDefaultAsync(p => p.CarrierId == c.Id && p.PeriodStart == secondHalfStart && p.PeriodEnd == secondHalfEnd);
+                        var payment = PaymentFor(secondHalfStart, secondHalfEnd);
                         results.Add(new PaymentListItemResponse(c.Id, c.Name, secondHalfStart, secondHalfEnd, secondHalfScheduled, grossEarnings, totalDiscounts, amountDue, payment?.AmountReceived, payment?.ReceivedAt, payment is not null));
                     }
                 }
